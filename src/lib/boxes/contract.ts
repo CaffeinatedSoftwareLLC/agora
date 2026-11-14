@@ -36,6 +36,15 @@ export const LABEL_BOX_BUILD = 'org.agora.box.build';
 /** Inside the box (§3, §7.1). */
 export const BOX_UID = 1000;
 export const BOX_HOME = '/home/agent';
+/**
+ * The owner's own account in the box (docs/box-terminal.md): the terminal relay and the shell run
+ * as this user, apart from the agent (BOX_UID). Its home is a tmpfs, mode 0700, so the agent cannot
+ * read it, and the box's PID 1 (root, with no capability but CAP_KILL) starts both users' processes.
+ */
+export const BOX_OPERATOR_UID = 1001;
+export const BOX_OPERATOR_HOME = '/home/operator';
+/** The directory the `as-agent` channel lives in: owned by the agent, traversable by the operator only. */
+export const AS_AGENT_DIR = '/run/as-agent';
 export const EDGE_HOSTNAME = 'edge';
 export const EDGE_AGORA_PORT = 8080;
 export const EDGE_PROXY_PORT = 3128;

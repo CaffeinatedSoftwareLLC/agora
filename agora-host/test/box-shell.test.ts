@@ -1,14 +1,16 @@
 import { fileURLToPath } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { ShellRelay, boxShellLoop, makeHelperPty, shellSpec, type PtyChild, type PtyOptions, type ShellTransport } from '../src/box-shell.js';
+import { ShellRelay, boxRelayCommand, boxRelayLoop, makeHelperPty, operatorShellSpec, readRelayToken, type PtyChild, type PtyOptions, type ShellTransport } from '../src/box-shell.js';
 import { boxMode } from '../src/box.js';
 import { config, tempDir } from './helpers.js';
 
 const SID = '01J00000000000000000000001';
+const TOKEN = `ar_${'0'.repeat(26)}.${'a'.repeat(64)}`;
 const HELPER = fileURLToPath(new URL('../../box/agora-pty', import.meta.url));
 const unix = process.platform !== 'win32';
 const hasPython = unix && spawnSync('python3', ['-c', 'import pty, termios']).status === 0;
@@ -185,51 +187,84 @@ describe('output pacing (the owner\'s rate limit)', () => {
     });
 });
 
-describe('the shell\'s folder and environment', () => {
-    const saved = { marker: boxMode.marker, flag: process.env.AGORA_HOST_IN_BOX };
-    afterEach(() => {
-        boxMode.marker = saved.marker;
-        if (saved.flag === undefined) delete process.env.AGORA_HOST_IN_BOX; else process.env.AGORA_HOST_IN_BOX = saved.flag;
+describe('the operator\'s shell: folder and environment', () => {
+    it('is the operator\'s alone: its home, a fixed root-owned PATH, the image\'s rc and git files, the proxy, and nothing of the agent\'s environment', () => {
+        const env = {
+            PATH: '/home/agent/.npm-global/bin:/usr/bin', HOME: '/home/agent', LANG: 'en_US.UTF-8', CLAUDE_CONFIG_DIR: '/home/agent/.agora/state/x',
+            AGORA_HOST_TOKEN: 'ah_secret.value', AGORA_BOT_TOKEN: 'bot_secret.value', AGORA_INSTANCE_URL: 'http://edge:8080', AGORA_RELAY_TOKEN: 'ar_secret.value',
+            HTTPS_PROXY: 'http://edge:3128', NO_PROXY: 'edge', ANTHROPIC_API_KEY: 'sk-should-not-leak', GITHUB_TOKEN: 'ghp_nope', BASH_ENV: '/home/agent/evil', LD_PRELOAD: '/tmp/evil.so',
+        };
+        const spec = operatorShellSpec(env);
+        expect(spec.cwd).toBe('/home/operator');
+        // bash reads the image's root-owned rc file and no file of any home
+        expect(spec.command).toEqual(['/bin/bash', '--noprofile', '--rcfile', '/opt/agora/operator.bashrc', '-i']);
+        // Root-owned directories only: nothing the agent can write, no `.`, no empty entry
+        expect(spec.env.PATH).toBe('/opt/agora/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin');
+        expect(spec.env.PATH!.split(':').every(p => p.startsWith('/') && !p.startsWith('/home') && !p.startsWith('/tmp'))).toBe(true);
+        expect(spec.env).toMatchObject({
+            HOME: '/home/operator', USER: 'operator', TERM: 'xterm-256color', LANG: 'en_US.UTF-8', SHELL: '/bin/bash',
+            HTTPS_PROXY: 'http://edge:3128', https_proxy: 'http://edge:3128', NO_PROXY: 'edge',
+            // git reads the image's file only: hooks and fsmonitor off, no safe.directory
+            GIT_CONFIG_GLOBAL: '/opt/agora/operator.gitconfig', GIT_CONFIG_NOSYSTEM: '1',
+        });
+        const all = JSON.stringify(spec.env);
+        for (const secret of ['ah_secret', 'bot_secret', 'ar_secret', 'sk-should-not-leak', 'ghp_nope', 'AGORA_', 'CLAUDE_CONFIG_DIR', '/home/agent', 'BASH_ENV', 'LD_PRELOAD']) expect(all).not.toContain(secret);
     });
 
-    it('is the CLI\'s own: its state directory, the proxy variables, a terminal type; never the host or bot token', async () => {
+    it('the files it names are the image\'s and say what the design says', () => {
+        const rc = readFileSync(fileURLToPath(new URL('../../box/operator.bashrc', import.meta.url)), 'utf8');
+        expect(rc).toContain('as-agent');
+        expect(rc).toContain('agent');
+        expect(rc).not.toMatch(/^\s*(\.|source)\s/m);
+        const git = readFileSync(fileURLToPath(new URL('../../box/operator.gitconfig', import.meta.url)), 'utf8');
+        expect(git).toMatch(/hooksPath\s*=\s*\/dev\/null/);
+        expect(git).toMatch(/fsmonitor\s*=\s*false/);
+        expect(git).not.toMatch(/^\s*\[safe\]/m);
+    });
+});
+
+describe('box-relay (the command)', () => {
+    const saved = { marker: boxMode.marker };
+    afterEach(() => { boxMode.marker = saved.marker; });
+    const quiet = () => { const e = vi.spyOn(console, 'error').mockImplementation(() => {}); return () => e.mockRestore(); };
+
+    it('refuses to run as the agent, as root, or outside a box, and starts nothing', async () => {
+        const restore = quiet();
+        try {
+            const loop = vi.fn();
+            const env = { AGORA_HOST_IN_BOX: '1', AGORA_INSTANCE_URL: 'http://edge:8080' };
+            expect(await boxRelayCommand(['--token-fd', '3'], env, { uid: 1000, loop })).toBe(2);
+            expect(await boxRelayCommand(['--token-fd', '3'], env, { uid: 0, loop })).toBe(2);
+            boxMode.marker = '/nonexistent/agora-box';
+            expect(await boxRelayCommand(['--token-fd', '3'], env, { uid: 1001, loop })).toBe(2);
+            expect(loop).not.toHaveBeenCalled();
+        } finally { restore(); }
+    });
+
+    it('reads the credential from the descriptor it was given, once, and only a well-formed one', async () => {
         const t = await tempDir();
         try {
             const marker = join(t.dir, 'agora-box');
-            await writeFile(marker, 'agora-box 6\n');
+            await writeFile(marker, 'agora-box 7\n');
             boxMode.marker = marker;
-            const cfg = config(t.dir);
-            cfg.profiles.builder.adapter = 'claude'; cfg.profiles.builder.proxyEnv = true;
-            const env = {
-                PATH: '/home/agent/.npm-global/bin:/usr/bin', HOME: '/home/agent', AGORA_HOST_IN_BOX: '1', LANG: 'en_US.UTF-8',
-                AGORA_HOST_TOKEN: 'ah_secret.value', AGORA_BOT_TOKEN: 'bot_secret.value', AGORA_INSTANCE_URL: 'http://edge:8080',
-                HTTPS_PROXY: 'http://edge:3128', NO_PROXY: 'edge', ANTHROPIC_API_KEY: 'sk-should-not-leak', GITHUB_TOKEN: 'ghp_nope',
-            };
-            const spec = shellSpec(cfg, env, () => true);
-            // Neutral ground: the box user's home, not the agent's worktree; one line says where the workspace is
-            expect(spec.command.slice(0, 2)).toEqual(['/bin/bash', '-c']);
-            expect(spec.command[2]).toContain('exec /bin/bash -i');
-            expect(spec.command[2]).toContain('the same box, as the same user, as the agent');
-            expect(spec.cwd).toBe('/home/agent');
-            expect(spec.env.AGORA_WORKSPACE).toBe(cfg.profiles.builder.workdir);
-            // The root-owned CLI directory comes first, ahead of the agent-writable ones
-            expect(spec.env.PATH).toBe('/opt/agora/bin:/home/agent/.npm-global/bin:/usr/bin');
-            expect(spec.env).toMatchObject({
-                HOME: '/home/agent', TERM: 'xterm-256color', LANG: 'en_US.UTF-8', SHELL: '/bin/bash',
-                CLAUDE_CONFIG_DIR: cfg.profiles.builder.stateDir, HTTPS_PROXY: 'http://edge:3128', https_proxy: 'http://edge:3128',
-            });
-            const all = JSON.stringify(spec.env);
-            for (const secret of ['ah_secret', 'bot_secret', 'sk-should-not-leak', 'ghp_nope', 'AGORA_HOST_TOKEN', 'AGORA_BOT_TOKEN', 'AGORA_INSTANCE_URL']) expect(all).not.toContain(secret);
+            const good = join(t.dir, 'good'); const bad = join(t.dir, 'bad');
+            await writeFile(good, `${TOKEN}\n`); await writeFile(bad, 'ah_not_a_relay_token.x');
+            const { openSync } = await import('node:fs');
+            expect(readRelayToken(openSync(good, 'r'))).toBe(TOKEN);
+            expect(() => readRelayToken(openSync(bad, 'r'))).toThrow();
+            const restore = quiet();
+            try {
+                const loop = vi.fn(async () => {});
+                const fd = openSync(good, 'r');
+                const env = { AGORA_HOST_IN_BOX: '1', AGORA_INSTANCE_URL: 'http://edge:8080' };
+                expect(await boxRelayCommand(['--token-fd', String(fd)], env, { uid: 1001, loop })).toBe(0);
+                expect(loop).toHaveBeenCalledWith(expect.objectContaining({ instance: 'http://edge:8080', token: TOKEN }));
+                // No fd, a bad one, or no instance address
+                expect(await boxRelayCommand([], env, { uid: 1001, loop })).toBe(2);
+                expect(await boxRelayCommand(['--token-fd', String(openSync(bad, 'r'))], env, { uid: 1001, loop })).toBe(2);
+                expect(await boxRelayCommand(['--token-fd', String(openSync(good, 'r'))], { AGORA_HOST_IN_BOX: '1' }, { uid: 1001, loop })).toBe(2);
+            } finally { restore(); }
         } finally { await t.cleanup(); }
-    });
-
-    it('always starts in the home folder; the workspace named in the banner is the scratch folder, then home, when the worktree is not there', async () => {
-        const cfg = config('/home/agent/work/o/r');
-        const env = { PATH: '/usr/bin', HOME: '/home/agent' };
-        const a = shellSpec(cfg, env, p => p === '/home/agent/scratch' || p === '/home/agent');
-        expect([a.cwd, a.env.AGORA_WORKSPACE]).toEqual(['/home/agent', '/home/agent/scratch']);
-        const b = shellSpec(cfg, env, p => p === '/home/agent');
-        expect([b.cwd, b.env.AGORA_WORKSPACE]).toEqual(['/home/agent', '/home/agent']);
     });
 });
 
@@ -248,32 +283,32 @@ describe('the connection to Agora', () => {
     it('does nothing on a machine: no socket, no shell, ever', async () => {
         delete process.env.AGORA_HOST_IN_BOX;
         const connect = vi.fn();
-        await boxShellLoop(config(), { signal: new AbortController().signal, log: () => {}, connect: connect as any });
+        await boxRelayLoop({ instance: 'http://127.0.0.1:3000', token: TOKEN, signal: new AbortController().signal, log: () => {}, connect: connect as any });
         expect(connect).not.toHaveBeenCalled();
         // The flag alone, with no marker file of the image, is not box mode either
         process.env.AGORA_HOST_IN_BOX = '1';
         boxMode.marker = '/nonexistent/agora-box';
-        await boxShellLoop(config(), { signal: new AbortController().signal, log: () => {}, connect: connect as any });
+        await boxRelayLoop({ instance: 'http://127.0.0.1:3000', token: TOKEN, signal: new AbortController().signal, log: () => {}, connect: connect as any });
         expect(connect).not.toHaveBeenCalled();
     });
 
-    it('in a box: connects as the host with the token and protocol, serves a shell, retries after a refusal and logs each reason once', async () => {
+    it('in a box: connects as the relay with its credential and protocol, serves a shell, retries after a refusal and logs each reason once', async () => {
         const t = await tempDir();
         try {
             const marker = join(t.dir, 'agora-box');
-            await writeFile(marker, 'agora-box 6\n');
+            await writeFile(marker, 'agora-box 7\n');
             boxMode.marker = marker; process.env.AGORA_HOST_IN_BOX = '1';
             const sockets: FakeSocket[] = []; const auths: any[] = []; const logs: string[] = [];
             const ctl = new AbortController();
             const spawned: PtyOptions[] = [];
-            const loop = boxShellLoop(config(t.dir), {
+            const loop = boxRelayLoop({ instance: 'http://127.0.0.1:3000/', token: TOKEN,
                 signal: ctl.signal, log: c => logs.push(c), retryMinMs: 5, retryMaxMs: 20,
                 connect: ((url: string, auth: any) => { auths.push({ url, auth }); const s = new FakeSocket(); sockets.push(s); return s; }) as any,
                 spawnPty: o => { spawned.push(o); return new FakePty(); },
             });
             const until = async (check: () => boolean) => { for (let i = 0; i < 400 && !check(); i++) await new Promise(r => setTimeout(r, 5)); expect(check()).toBe(true); };
             await until(() => sockets.length === 1);
-            expect(auths[0]).toEqual({ url: 'http://127.0.0.1:3000', auth: { type: 'host', token: 'ah_host.secret', shellProtocol: 1 } });
+            expect(auths[0]).toEqual({ url: 'http://127.0.0.1:3000', auth: { type: 'relay', token: TOKEN, shellProtocol: 2 } });
             // Refused (an older Agora, or a revoked token): retry, log the reason once
             sockets[0].emit('connect_error', new Error('Invalid token'));
             await until(() => sockets.length === 2);
@@ -308,12 +343,12 @@ describe('a second socket refused because the real one is still connected', () =
         const t = await tempDir();
         try {
             const marker = join(t.dir, 'agora-box');
-            await writeFile(marker, 'agora-box 6\n');
+            await writeFile(marker, 'agora-box 7\n');
             boxMode.marker = marker; process.env.AGORA_HOST_IN_BOX = '1';
             const ctl = new AbortController();
             const sockets: QuietSocket[] = [];
             const stamps: number[] = [];
-            const loop = boxShellLoop(config(t.dir), {
+            const loop = boxRelayLoop({ instance: 'http://127.0.0.1:3000/', token: TOKEN,
                 signal: ctl.signal, log: () => {}, retryMinMs: 20, retryMaxMs: 10_000,
                 connect: (() => { const s = new QuietSocket(); sockets.push(s); stamps.push(Date.now()); return s; }) as any,
             });
@@ -350,17 +385,17 @@ describe('the loop does not keep the host alive', () => {
         const t = await tempDir();
         try {
             const marker = join(t.dir, 'agora-box');
-            await writeFile(marker, 'agora-box 6\n');
+            await writeFile(marker, 'agora-box 7\n');
             boxMode.marker = marker; process.env.AGORA_HOST_IN_BOX = '1';
             const ctl = new AbortController();
             const sockets: QuietSocket[] = [];
             const started = Date.now();
-            const loop = boxShellLoop(config(t.dir), {
+            const loop = boxRelayLoop({ instance: 'http://127.0.0.1:3000/', token: TOKEN,
                 signal: ctl.signal, log: () => {}, retryMinMs: 60_000, retryMaxMs: 60_000,
                 connect: (() => { const s = new QuietSocket(); sockets.push(s); return s; }) as any,
             });
             await new Promise(r => setTimeout(r, 30));
-            sockets[0].emit('connect_error', new Error('Invalid host token'));
+            sockets[0].emit('connect_error', new Error('Invalid relay token'));
             await new Promise(r => setTimeout(r, 30));
             ctl.abort();
             await loop;
@@ -442,18 +477,21 @@ describe.skipIf(!hasPython)('the real pseudo-terminal (box/agora-pty, Python\'s 
         expect(r.out()).toContain('33 101');
     });
 
-    it('the shell shellSpec describes: starts in the neutral folder, says where the workspace is, has the image\'s CLI directory first', async () => {
+    it('the operator\'s shell, as specified: bash with the image\'s rc file, its prompt and banner, in the folder asked', async () => {
         const t = await tempDir();
         try {
             await mkdir(join(t.dir, 'home'), { recursive: true });
-            await mkdir(join(t.dir, 'ws'), { recursive: true });
-            const cfg = config(join(t.dir, 'ws'));
-            const spec = shellSpec(cfg, { PATH: '/usr/bin:/bin', HOME: join(t.dir, 'home') }, () => true);
-            const r = run([...spec.command.slice(0, 2), spec.command[2].replace('exec /bin/bash -i', 'pwd; echo "PATH=$PATH"; exit')], spec.cwd, spec.env);
+            const rc = join(t.dir, 'rc');
+            await writeFile(rc, readFileSync(fileURLToPath(new URL('../../box/operator.bashrc', import.meta.url))));
+            const spec = operatorShellSpec({ PATH: '/usr/bin:/bin' }, join(t.dir, 'home'));
+            const command = [...spec.command.slice(0, 3), rc, '-i'];
+            const r = run(command, spec.cwd, { ...spec.env, GIT_CONFIG_GLOBAL: '/dev/null' });
+            await until(() => r.out().includes('as-agent'));
+            expect(r.out()).toContain('your own account');
+            r.pty.write(Buffer.from('pwd; echo "git=$GIT_CONFIG_NOSYSTEM"; exit\n'));
             await r.exited;
-            const out = r.out();
-            expect(out).toContain(`The agent workspace is ${join(t.dir, 'ws')}`);
-            expect(out).toContain(join(t.dir, 'home'));
+            expect(r.out()).toContain(join(t.dir, 'home'));
+            expect(r.out()).toContain('git=1');
         } finally { await t.cleanup(); }
     });
 

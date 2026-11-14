@@ -31,7 +31,7 @@ let channelId: string;
 const sockets: Socket[] = [];
 
 interface Session { cookie: string; csrf: string }
-interface Box { id: string; name: string; generation: number; hostToken: string; botToken: string }
+interface Box { id: string; name: string; generation: number; hostToken: string; relayToken: string; botToken: string }
 interface FakeHost { socket: Socket; opened: any[]; input: Buffer[]; resized: any[]; closed: any[]; echo: boolean }
 
 async function cookieLogin(login: string): Promise<Session> {
@@ -47,7 +47,7 @@ async function makeBox(name: string, running = true): Promise<Box> {
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     const t = await rotateBoxTokens(ctx.db, res.body.box.id);
     if (running) await ctx.db.query(`UPDATE agent_boxes SET state = 'running' WHERE id = $1`, [res.body.box.id]);
-    return { id: res.body.box.id, name, generation: t.generation, hostToken: t.hostToken, botToken: t.botToken };
+    return { id: res.body.box.id, name, generation: t.generation, hostToken: t.hostToken, relayToken: t.relayToken, botToken: t.botToken };
 }
 
 const edgeFor = (box: Box, generation = box.generation) => signEdge(EDGE_SECRET, box.id, generation);
@@ -58,7 +58,7 @@ async function connectHost(box: Box, opts: { protocol?: number; token?: string; 
     const socket = io(base, {
         transports: ['websocket'], autoConnect: false, reconnection: false,
         extraHeaders: opts.headers ?? edgeFor(box),
-        auth: { type: 'host', token: opts.token ?? box.hostToken, shellProtocol: opts.protocol ?? 1 },
+        auth: { type: 'relay', token: opts.token ?? box.relayToken, shellProtocol: opts.protocol ?? 2 },
     });
     sockets.push(socket);
     host.socket = socket;
@@ -402,30 +402,63 @@ describe('the box host\'s socket', () => {
         const fresh = await makeBox('gamma');
         const mk = (o: { token?: string; headers?: Record<string, string>; protocol?: number }) => io(base, {
             transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: o.headers ?? edgeFor(fresh),
-            auth: { type: 'host', token: o.token ?? fresh.hostToken, shellProtocol: o.protocol ?? 1 },
+            auth: { type: 'relay', token: o.token ?? fresh.relayToken, shellProtocol: o.protocol ?? 2 },
         });
         const refused = async (o: Parameters<typeof mk>[0]) => { const s = mk(o); sockets.push(s); return refusal(s); };
         expect(await refused({ headers: {} })).toBe('box_token_outside_box');
         expect(await refused({ headers: edgeFor(box) })).toBe('token_not_for_this_box');
         expect(await refused({ headers: signEdge('00'.repeat(32), fresh.id, fresh.generation) })).toBe('bad_edge_signature');
-        expect(await refused({ token: 'ah_nope' })).toBe('Malformed host token');
-        expect(await refused({ token: `ah_${fresh.id}.${'0'.repeat(64)}` })).toBe('Invalid host token');
-        expect(await refused({ token: `Bot ${fresh.botToken}` })).toBe('Malformed host token');
+        expect(await refused({ token: 'ar_nope' })).toBe('Malformed relay token');
+        expect(await refused({ token: `ar_${fresh.id}.${'0'.repeat(64)}` })).toBe('Invalid relay token');
+        expect(await refused({ token: `Bot ${fresh.botToken}` })).toBe('Malformed relay token');
+        // The box's HOST token, which the agent can read, is not a terminal credential: not as a relay token...
+        expect(await refused({ token: fresh.hostToken })).toBe('Malformed relay token');
+        expect(await refused({ token: fresh.hostToken.replace(/^ah_/, 'ar_') })).toBe('Invalid relay token');
         expect(await refused({ protocol: 0 })).toBe('unsupported_protocol');
+        // ... and protocol 1 (the first slice, where the host held the terminal) is not served
+        expect(await refused({ protocol: 1 })).toBe('unsupported_protocol');
         expect((await rows(`SELECT shell_protocol FROM agent_hosts WHERE box_id = $1`, [fresh.id]))[0].shell_protocol).toBeNull();
         // A machine host (not a box's) is not one
         const machine = await api.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'pc' });
-        expect(await refused({ token: machine.body.token ?? machine.body.hostToken, headers: {} })).toMatch(/box_hosts_only|Invalid host token/);
+        expect(await refused({ token: machine.body.token ?? machine.body.hostToken, headers: {} })).toMatch(/Malformed relay token/);
         expect(await refused({})).toBe('connected');
-        expect((await rows(`SELECT shell_protocol FROM agent_hosts WHERE box_id = $1`, [fresh.id]))[0].shell_protocol).toBe(1);
+        expect((await rows(`SELECT shell_protocol FROM agent_hosts WHERE box_id = $1`, [fresh.id]))[0].shell_protocol).toBe(2);
+    });
+
+    test('the host token cannot register as a terminal endpoint at all: not as the old host handshake, not as a relay, not on any route', async () => {
+        const fresh = await makeBox('hostonly');
+        const old = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(fresh), auth: { type: 'host', token: fresh.hostToken, shellProtocol: 2 } });
+        sockets.push(old);
+        // `type: 'host'` is no terminal handshake any more: it is an ordinary (failed) chat login
+        expect(await refusal(old)).toBe('Invalid token');
+        expect(hubOf().hostConnected(fresh.id)).toBe(false);
+        // The relay credential is not a host token either: it opens no host route
+        const res = await api.get('/agent-hosts/@me/box-login').set({ Authorization: `AgentHost ${fresh.relayToken}`, ...edgeFor(fresh) });
+        expect(res.status).toBe(401);
+        // And it is a different secret
+        expect(fresh.relayToken.slice(fresh.relayToken.indexOf('.'))).not.toBe(fresh.hostToken.slice(fresh.hostToken.indexOf('.')));
+        // Only the relay credential registered: it is stored hashed, apart from the host token's hash
+        const row = (await rows(`SELECT secret_hash, relay_secret_hash FROM agent_hosts WHERE box_id = $1`, [fresh.id]))[0];
+        expect(row.relay_secret_hash).toBeTruthy();
+        expect(row.relay_secret_hash).not.toBe(row.secret_hash);
+        expect(row.relay_secret_hash).not.toContain(fresh.relayToken.slice(fresh.relayToken.indexOf('.') + 1));
+    });
+
+    test('a rebuild gives a new relay credential and the old one is dead', async () => {
+        const fresh = await makeBox('rebuilt');
+        const t = await rotateBoxTokens(ctx.db, fresh.id);
+        expect(t.relayToken).not.toBe(fresh.relayToken);
+        const s = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(fresh), auth: { type: 'relay', token: fresh.relayToken, shellProtocol: 2 } });
+        sockets.push(s);
+        expect(await refusal(s)).toBe('Invalid relay token');
     });
 
     test('an old generation\'s host token is dead after a rebuild', async () => {
-        const old = { token: box.hostToken, headers: edgeFor(box) };
+        const old = { token: box.relayToken, headers: edgeFor(box) };
         await rotateBoxTokens(ctx.db, box.id);
-        const s = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: old.headers, auth: { type: 'host', token: old.token, shellProtocol: 1 } });
+        const s = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: old.headers, auth: { type: 'relay', token: old.token, shellProtocol: 2 } });
         sockets.push(s);
-        expect(await refusal(s)).toBe('Invalid host token');
+        expect(await refusal(s)).toBe('Invalid relay token');
     });
 
     test('a host can only speak for its own terminal', async () => {
@@ -642,7 +675,7 @@ describe('review 1: a second socket with the host token cannot replace the real 
     test('refused while the real host is connected, audited and announced once; the real host keeps its terminal until the attempt, which closes it', async () => {
         const term = await openTerminal(box, ownerSession);
         const exit = wait(term, 'shell:exit');
-        const intruder = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(box), auth: { type: 'host', token: box.hostToken, shellProtocol: 1 } });
+        const intruder = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(box), auth: { type: 'relay', token: box.relayToken, shellProtocol: 2 } });
         sockets.push(intruder);
         const stolen: any[] = [];
         intruder.on('shell:input', m => stolen.push(m));
@@ -660,7 +693,7 @@ describe('review 1: a second socket with the host token cannot replace the real 
         expect(said[0].content).toContain('host_already_connected');
         // More attempts inside the hour add no second notice (and no second audit row inside the minute)
         for (let i = 0; i < 3; i++) {
-            const again = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(box), auth: { type: 'host', token: box.hostToken, shellProtocol: 1 } });
+            const again = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(box), auth: { type: 'relay', token: box.relayToken, shellProtocol: 2 } });
             sockets.push(again);
             expect(await refusal(again)).toBe('host_already_connected');
         }
@@ -796,7 +829,7 @@ describe('review 5: a host socket from an older generation does not count', () =
     test('the rebuilt box\'s own host replaces the stale socket instead of being refused', async () => {
         const t = await rotateBoxTokens(ctx.db, box.id);
         await ctx.db.query(`UPDATE agent_boxes SET state = 'running' WHERE id = $1`, [box.id]);
-        const rebuilt = await connectHost({ ...box, generation: t.generation, hostToken: t.hostToken, botToken: t.botToken });
+        const rebuilt = await connectHost({ ...box, generation: t.generation, hostToken: t.hostToken, relayToken: t.relayToken, botToken: t.botToken });
         expect(rebuilt.socket.connected).toBe(true);
         expect(hubOf().hostConnected(box.id, t.generation)).toBe(true);
         expect(await audits('box_host_conflict')).toHaveLength(0);

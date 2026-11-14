@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { BOX_ADAPTER_REGISTRY } from '../../src/lib/boxes/adapters';
 import { BOX_ADAPTERS as HOST_ADAPTERS } from '../../agora-host/src/box-adapters';
-import { api, connectFromBox, createBox, inBox, instance, psql, type Instance } from './harness';
+import { api, connectFromBox, createBox, docker, inBox, instance, psql, type Instance } from './harness';
 
 /**
  * Every adapter in the box adapter registry starts in a box (docs/agent-boxes.md, "Adding a
@@ -37,8 +37,11 @@ describe('every box adapter runs in a box', () => {
                 expect(login.status).toBe(409);
                 expect(login.body).toEqual({ error: 'login_not_supported' });
                 // boxd set the key under the registry's variable, for agora-host to pass to the CLI only
-                const env = await inBox(box.container, `tr '\\0' '\\n' < /proc/1/environ | cut -d= -f1 | grep -x ${spec.apiKeyEnv}`);
-                expect(env.stdout.trim()).toBe(spec.apiKeyEnv);
+                const inspected = JSON.parse((await docker('inspect', box.container)).stdout)[0].Config.Env as string[];
+                expect(inspected.map(e => e.split('=')[0])).toContain(spec.apiKeyEnv);
+                // ... and the agent's host (not the operator's relay) is where it ends up
+                const host = await inBox(box.container, `for f in /proc/[0-9]*; do tr '\\0' ' ' < $f/cmdline 2>/dev/null | grep -q '[a]gora-host/dist/index.js --config' && tr '\\0' '\\n' < $f/environ | cut -d= -f1; done | grep -x ${spec.apiKeyEnv} | head -1`);
+                expect(host.stdout.trim()).toBe(spec.apiKeyEnv);
             }
             // Its telemetry hosts are refused without a card
             for (const t of spec.telemetry) {

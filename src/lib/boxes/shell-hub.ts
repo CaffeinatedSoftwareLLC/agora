@@ -18,10 +18,12 @@ import {
  *
  *  - a browser socket (`auth.type = 'shell'`): the owner's cookie session, an allowed Origin and a
  *    single-use ticket bound to that session and one box;
- *  - a host socket (`auth.type = 'host'`): the box's own agora-host, with the box's host token,
- *    through the box's own edge (the provenance rule of docs/agent-boxes.md §4.1).
+ *  - a relay socket (`auth.type = 'relay'`): the box's terminal relay, a process of its own Unix
+ *    user inside the box (docs/box-terminal.md), with the relay credential minted for that box
+ *    generation, through the box's own edge (the provenance rule of docs/agent-boxes.md §4.1).
+ *    The box's host token, which the agent can read, is not accepted here at all.
  *
- * The hub joins a browser to the host of the box its ticket names, and to nothing else. Bytes go
+ * The hub joins a browser to the relay of the box its ticket names, and to nothing else. Bytes go
  * socket to socket, never through a Socket.IO room, never into a database column or a log line;
  * the hub keeps only counts. One terminal per box at a time (a unique index says so too).
  */
@@ -129,10 +131,11 @@ export class ShellHub {
     // ─── Host sockets ───
 
     /**
-     * Take a box's host socket. One host per box: while the registered socket is connected at the
-     * same generation, a second one is refused. The box's user can read the host token, so a
-     * second socket with it could otherwise take the owner's keystrokes. A genuine reconnect comes
-     * after the old socket's disconnect or ping timeout. Returns false when refused.
+     * Take a box's relay socket (kept as "host" in the names: it is the box's end of the terminal).
+     * One per box: while the registered socket is connected at the same generation, a second one is
+     * refused. Only the relay's own user holds the credential, but a leak by any other road must
+     * not let a second socket take the owner's keystrokes. A genuine reconnect comes after the old
+     * socket's disconnect or ping timeout. Returns false when refused.
      */
     registerHost(socket: Socket, info: ShellHostInfo): boolean {
         const old = this.hosts.get(info.boxId);
@@ -476,13 +479,14 @@ export interface ShellAuthDeps {
     provenanceRefused(headers: Record<string, string | string[] | undefined>, cred: ProvenanceCredential): Promise<string | null>;
 }
 
-const HOST_TOKEN = /^ah_([0-9A-HJKMNP-TV-Z]{26})\.(.+)$/;
+/** The relay credential: `ar_<hostId>.<secret>`. A host token (`ah_`) does not parse. */
+const RELAY_TOKEN = /^ar_([0-9A-HJKMNP-TV-Z]{26})\.(.+)$/;
 const intOrNull = (v: unknown) => v === null || v === undefined ? null : Number(v);
 
 /** Is this handshake one of the terminal's? Decided on `auth.type` alone, before any other path reads it. */
 export const isShellHandshake = (auth: unknown) => {
     const t = (auth as { type?: unknown } | undefined)?.type;
-    return t === 'shell' || t === 'host';
+    return t === 'shell' || t === 'relay';
 };
 
 /**
@@ -492,34 +496,36 @@ export const isShellHandshake = (auth: unknown) => {
 export async function shellHandshake(d: ShellAuthDeps, socket: Socket, next: (err?: Error) => void): Promise<void> {
     const type = (socket.handshake.auth as { type?: string })?.type;
     try {
-        if (type === 'host') return await hostHandshake(d, socket, next);
+        if (type === 'relay') return await relayHandshake(d, socket, next);
         return await browserHandshake(d, socket, next);
     } catch {
         return next(new Error('Invalid token'));
     }
 }
 
-async function hostHandshake(d: ShellAuthDeps, socket: Socket, next: (err?: Error) => void): Promise<void> {
+async function relayHandshake(d: ShellAuthDeps, socket: Socket, next: (err?: Error) => void): Promise<void> {
     const auth = socket.handshake.auth as { token?: unknown; shellProtocol?: unknown };
-    const m = typeof auth.token === 'string' ? HOST_TOKEN.exec(auth.token) : null;
-    if (!m) return next(new Error('Malformed host token'));
+    const m = typeof auth.token === 'string' ? RELAY_TOKEN.exec(auth.token) : null;
+    if (!m) return next(new Error('Malformed relay token'));
+    // The relay credential only: the host token's hash is never consulted here
     const row = (await d.db.query(
-        `SELECT h.id, h.server_id, h.secret_hash, h.kind, h.box_id, h.box_generation, b.generation AS box_current_generation, b.desired_state
+        `SELECT h.id, h.server_id, h.relay_secret_hash, h.kind, h.box_id, h.box_generation, b.generation AS box_current_generation, b.desired_state
          FROM agent_hosts h LEFT JOIN agent_boxes b ON b.id = h.box_id
          WHERE h.id = $1 AND h.revoked_at IS NULL`, [m[1]]
     )).rows[0];
-    if (!row || !await verifyBotSecret(m[2], row.secret_hash)) return next(new Error('Invalid host token'));
+    if (!row || !row.relay_secret_hash || !await verifyBotSecret(m[2], row.relay_secret_hash)) return next(new Error('Invalid relay token'));
     const refused = await d.provenanceRefused(socket.handshake.headers, {
-        kind: 'host', id: row.id.trim(), serverId: row.server_id.trim(), boxId: row.box_id?.trim() || null,
+        kind: 'relay', id: row.id.trim(), serverId: row.server_id.trim(), boxId: row.box_id?.trim() || null,
         generation: intOrNull(row.box_generation), currentGeneration: intOrNull(row.box_current_generation),
     });
     if (refused) return next(new Error(refused));
-    // Only a box's own host takes part, and only while its box lives
+    // Only a box's own relay takes part, and only while its box lives
     if (row.kind !== 'box' || !row.box_id || row.desired_state === 'deleted') return next(new Error('box_hosts_only'));
     const protocol = Number.isInteger(auth.shellProtocol) ? Math.min(auth.shellProtocol as number, SHELL_PROTOCOL) : 0;
-    if (protocol < 1) return next(new Error('unsupported_protocol'));
-    // The box's user can read this token. A second socket while the real host is connected is
-    // refused, audited and announced, and any open terminal is closed (shell-hub.ts registerHost)
+    if (protocol < SHELL_PROTOCOL) return next(new Error('unsupported_protocol'));
+    // The agent cannot read the relay credential, but a second socket while the real relay is
+    // connected is still refused, audited and announced, and any open terminal is closed
+    // (shell-hub.ts registerHost): defence in depth for a leak by any other road
     if (d.hub.hostConnected(row.box_id.trim(), Number(row.box_generation))) {
         d.hub.hostConflict({ boxId: row.box_id.trim(), serverId: row.server_id.trim() }, 'handshake');
         return next(new Error('host_already_connected'));
@@ -569,7 +575,7 @@ async function browserHandshake(d: ShellAuthDeps, socket: Socket, next: (err?: E
     if (box.generation !== redeemed.generation || box.state !== 'running' || box.desired_state !== 'running' || box.revoked_at) {
         return refuse('box_not_ready', redeemed.boxId, box.server_id.trim());
     }
-    if (!d.hub.hostConnected(redeemed.boxId, box.generation)) return refuse(box.shell_protocol ? 'box_not_ready' : 'box_needs_update', redeemed.boxId, box.server_id.trim());
+    if (!d.hub.hostConnected(redeemed.boxId, box.generation)) return refuse(Number(box.shell_protocol) >= SHELL_PROTOCOL ? 'box_not_ready' : 'box_needs_update', redeemed.boxId, box.server_id.trim());
 
     const sessionId = generateUlid();
     try {

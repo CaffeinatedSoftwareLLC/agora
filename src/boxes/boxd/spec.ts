@@ -1,7 +1,7 @@
 import type { ContainerCreateOptions } from 'dockerode';
 import type { BoxAdapter } from '../../lib/boxes/adapters';
 import {
-    BOX_HOME, BOX_UID, EDGE_AGORA_PORT, EDGE_HOSTNAME, EDGE_PROXY_PORT,
+    AS_AGENT_DIR, BOX_HOME, BOX_OPERATOR_HOME, BOX_OPERATOR_UID, BOX_UID, EDGE_AGORA_PORT, EDGE_HOSTNAME, EDGE_PROXY_PORT,
     LABEL_BOX, LABEL_BOX_BUILD, LABEL_BOX_GENERATION, LABEL_BOX_VERSION, LABEL_INSTANCE,
     boxContainerName, boxNetworkName, boxVolumeName,
 } from '../../lib/boxes/contract';
@@ -16,13 +16,28 @@ import { boxAddress, edgeAddress, gatewayAddress } from './subnets';
  * Nothing a person or a box sends reaches Docker as a flag, a mount or a capability.
  */
 
-export const BOX_USER = `${BOX_UID}:${BOX_UID}`;
+/**
+ * The user the container starts as: root, only so the box's init (box/agora-box-init, PID 1) can
+ * start the agent's processes and the owner's relay each under its own user. It holds exactly
+ * INIT_CAPS, uses CAP_SETUID/SETGID/SETPCAP to drop each child to no capability at all, then keeps
+ * only CAP_KILL (to pass a stop on to the two). No process of either user holds a capability, and
+ * no-new-privileges is on for all of them.
+ */
+export const BOX_USER = '0:0';
+/** The agent's user: what its processes run as (the volume's owner). */
+export const AGENT_USER = `${BOX_UID}:${BOX_UID}`;
+/** The only capabilities the container gets, all for the init (the Docker names without CAP_). */
+export const INIT_CAPS = ['KILL', 'SETGID', 'SETPCAP', 'SETUID'] as const;
 export const RUN_AGORA_DIR = '/run/agora';
 export const TMPFS: Record<string, string> = {
     // Builds and package managers run things from /tmp, so it stays exec
     '/tmp': 'rw,nosuid,nodev,size=1g,mode=1777',
-    // agora-host's config with the tokens (§8.1); readable by the box user only
+    // agora-host's config with the tokens (§8.1); readable by the agent only
     [RUN_AGORA_DIR]: `rw,noexec,nosuid,nodev,size=1m,mode=0700,uid=${BOX_UID},gid=${BOX_UID}`,
+    // The owner's home (the terminal relay and shell): the operator's alone, mode 0700, gone at restart
+    [BOX_OPERATOR_HOME]: `rw,nosuid,nodev,size=256m,mode=0700,uid=${BOX_OPERATOR_UID},gid=${BOX_OPERATOR_UID}`,
+    // Where `as-agent` reaches the agent's side: the agent owns it, the operator's group may only traverse (0710)
+    [AS_AGENT_DIR]: `rw,noexec,nosuid,nodev,size=1m,mode=0710,uid=${BOX_UID},gid=${BOX_OPERATOR_UID}`,
 };
 export const STOP_TIMEOUT_SECONDS = 30;
 
@@ -50,6 +65,8 @@ export interface BoxSpecInput {
     subnet: string;
     limits: BoxLimits;
     hostToken: string;
+    /** The terminal relay's credential (ar_…): goes to the init, which hands it to the operator's relay only */
+    relayToken: string;
     botId: string;
     botToken: string;
     profile: BoxProfileEnv;
@@ -91,6 +108,7 @@ export function containerEnv(input: BoxSpecInput): string[] {
         `AGORA_BOX_GENERATION=${input.generation}`,
         `AGORA_INSTANCE_URL=http://${EDGE_HOSTNAME}:${EDGE_AGORA_PORT}`,
         `AGORA_HOST_TOKEN=${input.hostToken}`,
+        `AGORA_RELAY_TOKEN=${input.relayToken}`,
         `AGORA_BOT_ID=${input.botId.trim()}`,
         `AGORA_BOT_TOKEN=${input.botToken}`,
         `AGORA_BOX_PROFILE=${JSON.stringify(profile)}`,
@@ -163,7 +181,7 @@ export function containerSpec(input: BoxSpecInput): ContainerCreateOptions {
             Binds: [],
             Mounts: [{ Type: 'volume', Source: boxVolumeName(input.instance, input.boxId), Target: BOX_HOME, ReadOnly: false }],
             CapDrop: ['ALL'],
-            CapAdd: [],
+            CapAdd: [...INIT_CAPS],
             SecurityOpt: ['no-new-privileges'],
             PidsLimit: limits.pids,
             Memory: memoryBytes,
@@ -223,7 +241,8 @@ export function containerDrift(info: any, e: ExpectedBox): string[] {
     if (hc.Privileged !== false) out.push('privileged');
     if (hc.ReadonlyRootfs !== true) out.push('read-only');
     if (!same(hc.CapDrop, ['ALL'])) out.push('cap-drop');
-    if (!empty(hc.CapAdd)) out.push('cap-add');
+    // Exactly the init's capabilities, however this Docker spells them (SETUID or CAP_SETUID)
+    if (!same(capNames(hc.CapAdd), [...INIT_CAPS])) out.push('cap-add');
     if (!same(hc.SecurityOpt, ['no-new-privileges'])) out.push('security-opt');
     if (!same(sortKeys(hc.Tmpfs ?? {}), sortKeys(TMPFS))) out.push('tmpfs');
     if (!empty(hc.Binds)) out.push('binds');
@@ -244,6 +263,11 @@ export function containerDrift(info: any, e: ExpectedBox): string[] {
     if (labels[LABEL_INSTANCE] !== e.instance || labels[LABEL_BOX] !== e.boxId.trim()
         || labels[LABEL_BOX_VERSION] !== String(e.imageVersion)) out.push('labels');
     return out;
+}
+
+/** Capability names without the CAP_ prefix, upper case, sorted. */
+function capNames(v: unknown): string[] {
+    return (Array.isArray(v) ? v : []).map(c => String(c).toUpperCase().replace(/^CAP_/, '')).sort();
 }
 
 function sortKeys(o: Record<string, string>): Record<string, string> {

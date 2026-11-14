@@ -68,7 +68,7 @@ export async function boxTerminalRoutes(app: FastifyInstance) {
                 box: { id: box.id.trim(), name: box.name, adapter: box.adapter },
                 // supported: the box's agora-host has spoken the terminal protocol at least once.
                 // An older box image never has: it needs its update first.
-                supported: !!box.shell_protocol,
+                supported: Number(box.shell_protocol) >= SHELL_PROTOCOL,
                 hostConnected: !!shellHub()?.hostConnected(box.id.trim(), box.generation),
                 running: box.desired_state === 'running' && box.state === 'running',
                 open: open && { id: open.id, openedByName: open.openedByName, openedAt: open.openedAt, mine: open.openedBy === request.userId!.trim() },
@@ -107,7 +107,7 @@ export async function boxTerminalRoutes(app: FastifyInstance) {
         if (!jti) return refuse(403, 'cookie_session_required');
 
         if (box.desired_state !== 'running' || box.state !== 'running') return refuse(409, 'box_not_running');
-        if (!box.shell_protocol) return refuse(409, 'box_needs_update');
+        if (!(Number(box.shell_protocol) >= SHELL_PROTOCOL)) return refuse(409, 'box_needs_update');
         if (!shellHub()?.hostConnected(boxId, box.generation)) return refuse(409, 'box_not_ready');
 
         // The owner's password again, counted against the login limit: a stolen cookie or a script

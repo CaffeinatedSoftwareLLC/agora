@@ -1,0 +1,487 @@
+#!/usr/bin/env python3
+"""as-agent-server: the agent's side of `as-agent` (docs/box-terminal.md).
+
+Runs as the AGENT user (agora-host starts and supervises it). The owner's shell runs as the
+OPERATOR user; `as-agent <command>` there asks this server to run <command> with the agent's
+rights, in the agent's workspace, so that nothing the agent wrote ever runs as the operator.
+
+The socket lives in /run/as-agent (a tmpfs the agent owns and only the operator's group may
+traverse). Who may ask is decided by the kernel, not by the file mode: every connection's
+SO_PEERCRED user id must be the operator's, or the connection is refused before a byte of its
+request is read. The agent (same uid as this server) is refused too: it has no reason to ask.
+
+Frames, both ways: one type byte, a 4-byte big-endian length, the payload.
+  client -> server  Q request (JSON, first), I stdin bytes, D stdin closed, R resize "cols rows",
+                    S signal name (INT TERM HUP QUIT)
+  server -> client  O stdout bytes (everything, with a terminal), E stderr bytes, X exit (JSON),
+                    F refused or failed to start (text)
+Nothing a command says is logged here; only fixed codes go to stderr.
+"""
+import errno
+import fcntl
+import json
+import os
+import pty
+import re
+import select
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import termios
+import time
+
+SOCKET = os.environ.get('AGORA_AS_AGENT_SOCKET', '/run/as-agent/server.sock')
+OPERATOR_UID = int(os.environ.get('AGORA_OPERATOR_UID', '1001'))
+MAX_SESSIONS = 8
+MAX_REQUEST = 256 * 1024
+MAX_FRAME = 1 << 20
+CHUNK = 1 << 14
+KILL_AFTER = 2.0
+SIGNALS = {'INT': signal.SIGINT, 'TERM': signal.SIGTERM, 'HUP': signal.SIGHUP, 'QUIT': signal.SIGQUIT}
+TERM_RE = re.compile(r'^[A-Za-z0-9._+-]{1,40}$')
+
+
+def code(message):
+    sys.stderr.write('as_agent_%s\n' % message)
+    sys.stderr.flush()
+
+
+def frame(kind, payload=b''):
+    return kind + struct.pack('>I', len(payload)) + payload
+
+
+def send(conn, kind, payload=b''):
+    data = frame(kind, payload)
+    while data:
+        try:
+            n = conn.send(data)
+        except (BlockingIOError, InterruptedError):
+            select.select([], [conn], [], 1.0)
+            continue
+        data = data[n:]
+
+
+class Reader:
+    """Frames out of a stream, without blocking forever."""
+
+    def __init__(self, conn):
+        self.conn = conn
+        self.buf = bytearray()
+        self.closed = False
+
+    def fill(self):
+        try:
+            data = self.conn.recv(CHUNK * 4)
+        except (BlockingIOError, InterruptedError):
+            return
+        except OSError:
+            self.closed = True
+            return
+        if not data:
+            self.closed = True
+        else:
+            self.buf += data
+
+    def next(self, limit=MAX_FRAME):
+        if len(self.buf) < 5:
+            return None
+        length = struct.unpack('>I', bytes(self.buf[1:5]))[0]
+        if length > limit:
+            raise ValueError('frame too large')
+        if len(self.buf) < 5 + length:
+            return None
+        kind = bytes(self.buf[0:1])
+        payload = bytes(self.buf[5:5 + length])
+        del self.buf[:5 + length]
+        return kind, payload
+
+
+def valid_request(req):
+    argv = req.get('argv')
+    if not isinstance(argv, list) or not 1 <= len(argv) <= 1024:
+        return False
+    for a in argv:
+        if not isinstance(a, str) or len(a) > 32768 or '\0' in a:
+            return False
+    if not argv[0]:
+        return False
+    if req.get('tty') not in (True, False):
+        return False
+    return True
+
+
+def set_size(fd, cols, rows):
+    try:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+    except OSError:
+        pass
+
+
+def size_of(req, cols_key='cols', rows_key='rows'):
+    cols, rows = req.get(cols_key), req.get(rows_key)
+    if isinstance(cols, int) and isinstance(rows, int) and 1 <= cols <= 500 and 1 <= rows <= 200:
+        return cols, rows
+    return 80, 24
+
+
+def child_env(req):
+    env = dict(os.environ)
+    # Our own settings are not the command's
+    for name in ('AGORA_AS_AGENT_SOCKET', 'AGORA_OPERATOR_UID'):
+        env.pop(name, None)
+    term = req.get('term')
+    if req['tty'] and isinstance(term, str) and TERM_RE.match(term):
+        env['TERM'] = term
+    return env
+
+
+def workspace():
+    for path in (os.environ.get('AGORA_WORKSPACE'), os.environ.get('HOME')):
+        if path and os.path.isdir(path):
+            return path
+    return '/'
+
+
+def run_session(conn):
+    """One operator request, in a process of its own. Never returns."""
+    signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+    try:
+        pid, uid, _gid = struct.unpack('3i', conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i')))
+    except OSError:
+        uid = -1
+    if uid != OPERATOR_UID:
+        code('refused')
+        try:
+            send(conn, b'F', b'forbidden')
+        except OSError:
+            pass
+        os._exit(0)
+    conn.setblocking(False)
+    reader = Reader(conn)
+    deadline = time.monotonic() + 10
+    req = None
+    try:
+        while req is None:
+            item = reader.next(MAX_REQUEST)
+            if item:
+                if item[0] != b'Q':
+                    raise ValueError('first frame')
+                req = json.loads(item[1])
+                break
+            if reader.closed or time.monotonic() > deadline:
+                os._exit(0)
+            select.select([conn], [], [], 0.5)
+            reader.fill()
+        if not isinstance(req, dict) or not valid_request(req):
+            raise ValueError('bad request')
+    except (ValueError, UnicodeDecodeError):
+        try:
+            send(conn, b'F', b'bad_request')
+        except OSError:
+            pass
+        os._exit(0)
+    code('started')
+    try:
+        status = relay_tty(conn, reader, req) if req['tty'] else relay_pipes(conn, reader, req)
+    except Exception:  # noqa: BLE001
+        code('failed')
+        try:
+            send(conn, b'F', b'failed')
+        except OSError:
+            pass
+        os._exit(1)
+    try:
+        send(conn, b'X', json.dumps({'code': status}).encode())
+    except OSError:
+        pass
+    code('ended')
+    os._exit(0)
+
+
+def decode_status(st):
+    return os.WEXITSTATUS(st) if os.WIFEXITED(st) else 128 + os.WTERMSIG(st)
+
+
+def handle_control(kind, payload, pgid, master=None, stdin_writer=None):
+    """Apply one client frame. Returns False when stdin is finished."""
+    if kind == b'S':
+        sig = SIGNALS.get(payload.decode('ascii', 'ignore'))
+        if sig:
+            try:
+                os.killpg(pgid, sig)
+            except OSError:
+                pass
+    elif kind == b'R' and master is not None:
+        parts = payload.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            c, r = int(parts[0]), int(parts[1])
+            if 1 <= c <= 500 and 1 <= r <= 200:
+                set_size(master, c, r)
+
+
+def relay_tty(conn, reader, req):
+    cols, rows = size_of(req)
+    env = child_env(req)
+    cwd = workspace()
+    pid, master = pty.fork()
+    if pid == 0:
+        try:
+            os.chdir(cwd)
+            os.execvpe(req['argv'][0], req['argv'], env)
+        except OSError:
+            os.write(2, ('as-agent: cannot run %s\r\n' % req['argv'][0][:100]).encode('utf8', 'replace'))
+            os._exit(127)
+    set_size(master, cols, rows)
+    os.set_blocking(master, False)
+    to_child = bytearray()
+    to_client = bytearray()
+    master_open = True
+    status = None
+    hung_up = None
+    while True:
+        if status is None:
+            done, st = os.waitpid(pid, os.WNOHANG)
+            if done:
+                status = decode_status(st)
+                status_at = time.monotonic()
+        if status is not None and not to_client and (not master_open or time.monotonic() - status_at > 0.3):
+            break
+        if (reader.closed or hung_up) and status is None:
+            if hung_up is None:
+                hung_up = time.monotonic()
+                try:
+                    os.killpg(pid, signal.SIGHUP)
+                except OSError:
+                    pass
+            elif time.monotonic() - hung_up > KILL_AFTER:
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+        if reader.closed and status is not None:
+            break
+        rl = []
+        wl = []
+        if not reader.closed:
+            rl.append(conn)
+        if master_open and len(to_client) < (1 << 18):
+            rl.append(master)
+        if master_open and to_child:
+            wl.append(master)
+        if to_client:
+            wl.append(conn)
+        try:
+            r, w, _ = select.select(rl, wl, [], 0.2)
+        except (InterruptedError, OSError):
+            continue
+        if conn in r:
+            reader.fill()
+        # Frames that arrived with the request are already buffered: parse every time round
+        while True:
+            item = reader.next()
+            if not item:
+                break
+            kind, payload = item
+            if kind == b'I':
+                to_child += payload
+            else:
+                handle_control(kind, payload, pid, master)
+        if master in r:
+            try:
+                data = os.read(master, CHUNK)
+                if data:
+                    to_client += frame(b'O', data)
+                else:
+                    master_open = False
+            except BlockingIOError:
+                pass
+            except OSError as e:
+                if e.errno in (errno.EIO, errno.EBADF):
+                    master_open = False
+        if master in w and to_child:
+            try:
+                n = os.write(master, to_child[:CHUNK])
+                del to_child[:n]
+            except BlockingIOError:
+                pass
+            except OSError:
+                to_child.clear()
+        if conn in w and to_client:
+            try:
+                n = conn.send(to_client[:CHUNK * 4])
+                del to_client[:n]
+            except (BlockingIOError, InterruptedError):
+                pass
+            except OSError:
+                reader.closed = True
+                to_client.clear()
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        pass
+    return status if status is not None else 0
+
+
+def relay_pipes(conn, reader, req):
+    env = child_env(req)
+    try:
+        proc = subprocess.Popen(
+            req['argv'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cwd=workspace(), env=env, start_new_session=True, close_fds=True)
+    except OSError:
+        send(conn, b'E', ('as-agent: cannot run %s\n' % req['argv'][0][:100]).encode('utf8', 'replace'))
+        return 127
+    pgid = proc.pid
+    for f in (proc.stdin, proc.stdout, proc.stderr):
+        os.set_blocking(f.fileno(), False)
+    to_child = bytearray()
+    to_client = bytearray()
+    stdin_done = False
+    stdin_eof = False
+    out_open = {proc.stdout.fileno(): b'O', proc.stderr.fileno(): b'E'}
+    hung_up = None
+    status = None
+    while True:
+        if status is None:
+            rc = proc.poll()
+            if rc is not None:
+                status = rc if rc >= 0 else 128 - rc
+        if status is not None and not out_open and not to_client:
+            break
+        if reader.closed and status is None:
+            if hung_up is None:
+                hung_up = time.monotonic()
+                try:
+                    os.killpg(pgid, signal.SIGHUP)
+                except OSError:
+                    pass
+            elif time.monotonic() - hung_up > KILL_AFTER:
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except OSError:
+                    pass
+        if reader.closed and status is not None and not to_client:
+            break
+        rl = list(out_open) if len(to_client) < (1 << 18) else []
+        if not reader.closed:
+            rl.append(conn)
+        wl = []
+        if to_child and not stdin_done:
+            wl.append(proc.stdin.fileno())
+        if to_client:
+            wl.append(conn)
+        try:
+            r, w, _ = select.select(rl, wl, [], 0.2)
+        except (InterruptedError, OSError):
+            continue
+        if conn in r:
+            reader.fill()
+        # Frames that arrived with the request are already buffered: parse every time round
+        while True:
+            item = reader.next()
+            if not item:
+                break
+            kind, payload = item
+            if kind == b'I':
+                to_child += payload
+            elif kind == b'D':
+                stdin_eof = True
+            else:
+                handle_control(kind, payload, pgid)
+        for fd in list(out_open):
+            if fd in r:
+                try:
+                    data = os.read(fd, CHUNK)
+                except BlockingIOError:
+                    continue
+                except OSError:
+                    data = b''
+                if data:
+                    to_client += frame(out_open[fd], data)
+                else:
+                    del out_open[fd]
+        if to_child and not stdin_done and proc.stdin.fileno() in w:
+            try:
+                n = os.write(proc.stdin.fileno(), to_child[:CHUNK])
+                del to_child[:n]
+            except BlockingIOError:
+                pass
+            except OSError:
+                to_child.clear()
+        if stdin_eof and not to_child and not stdin_done:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+            stdin_done = True
+        if conn in w and to_client:
+            try:
+                n = conn.send(to_client[:CHUNK * 4])
+                del to_client[:n]
+            except (BlockingIOError, InterruptedError):
+                pass
+            except OSError:
+                reader.closed = True
+                to_client.clear()
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except OSError:
+        pass
+    return status if status is not None else 0
+
+
+def main():
+    sessions = set()
+
+    def reap(_s, _f):
+        while True:
+            try:
+                pid, _ = os.waitpid(-1, os.WNOHANG)
+            except ChildProcessError:
+                return
+            if not pid:
+                return
+            sessions.discard(pid)
+
+    signal.signal(signal.SIGCHLD, reap)
+    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    try:
+        os.unlink(SOCKET)
+    except FileNotFoundError:
+        pass
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(SOCKET)
+    # Anyone who can traverse the directory (the agent, the operator) may connect; the kernel's
+    # peer credentials decide who is served
+    os.chmod(SOCKET, 0o666)
+    server.listen(16)
+    code('listening')
+    while True:
+        try:
+            conn, _ = server.accept()
+        except InterruptedError:
+            continue
+        except OSError as e:
+            if e.errno == errno.EINTR:
+                continue
+            raise
+        if len(sessions) >= MAX_SESSIONS:
+            try:
+                send(conn, b'F', b'busy')
+            except OSError:
+                pass
+            conn.close()
+            continue
+        pid = os.fork()
+        if pid == 0:
+            server.close()
+            run_session(conn)
+        sessions.add(pid)
+        conn.close()
+
+
+if __name__ == '__main__':
+    main()

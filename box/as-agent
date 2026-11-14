@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""as-agent: run a command with the AGENT's rights, from the owner's shell (docs/box-terminal.md).
+
+    as-agent claude            the agent's CLI, logged in as the agent, interactive
+    as-agent git status        a repository the agent wrote, with the agent's own hooks
+    as-agent npm test          the agent's project scripts, as the agent
+    as-agent                   a shell on the agent's side
+
+The command runs in the agent's workspace, as the agent's Unix user, through the agent's side of
+the box (as-agent-server). Hooks and scripts the agent wrote therefore run as the agent and never
+as you. In exchange, what you type in an as-agent session is on the agent's side of the wall: the
+agent can see it. Do not type a password or token into it.
+
+With a terminal this is interactive (resize and Ctrl-C work); without one, stdin, stdout, stderr
+and the exit status pass through.
+"""
+import fcntl
+import json
+import os
+import select
+import signal
+import socket
+import struct
+import sys
+import termios
+import tty
+
+SOCKET = os.environ.get('AGORA_AS_AGENT_SOCKET', '/run/as-agent/server.sock')
+CHUNK = 1 << 14
+
+
+def frame(kind, payload=b''):
+    return kind + struct.pack('>I', len(payload)) + payload
+
+
+def fail(message, status):
+    sys.stderr.write('as-agent: %s\n' % message)
+    sys.exit(status)
+
+
+def window_size(fd):
+    try:
+        rows, cols, _x, _y = struct.unpack('HHHH', fcntl.ioctl(fd, termios.TIOCGWINSZ, b'\0' * 8))
+        if rows and cols:
+            return cols, rows
+    except OSError:
+        pass
+    return 80, 24
+
+
+def main():
+    argv = sys.argv[1:]
+    if argv[:1] in (['-h'], ['--help']):
+        sys.stdout.write(__doc__)
+        return 0
+    if argv[:1] == ['--']:
+        argv = argv[1:]
+    if not argv:
+        argv = ['/bin/bash', '-i']
+    interactive = os.isatty(0) and os.isatty(1)
+
+    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        conn.connect(SOCKET)
+    except OSError:
+        fail("the agent's side is not running (no one is listening at %s)" % SOCKET, 69)
+    cols, rows = window_size(1) if interactive else (80, 24)
+    request = {'v': 1, 'argv': argv, 'tty': interactive, 'cols': cols, 'rows': rows, 'term': os.environ.get('TERM', 'xterm')}
+    payload = json.dumps(request).encode()
+    conn.sendall(frame(b'Q', payload))
+
+    if interactive:
+        sys.stderr.write("\033[33mas-agent: this runs on the agent's side; the agent can see what you type here. Never type a password or token.\033[0m\r\n")
+
+    resize = []
+    forwarded = []
+    signal.signal(signal.SIGWINCH, lambda *_: resize.append(1))
+    if not interactive:
+        for name in ('INT', 'TERM', 'HUP', 'QUIT'):
+            signal.signal(getattr(signal, 'SIG' + name), lambda s, _f, n=name: forwarded.append(n))
+    saved = None
+    if interactive:
+        saved = termios.tcgetattr(0)
+        tty.setraw(0)
+    buf = bytearray()
+    stdin_open = True
+    status = 1
+    try:
+        while True:
+            if resize and interactive:
+                resize.clear()
+                c, r = window_size(1)
+                conn.sendall(frame(b'R', ('%d %d' % (c, r)).encode()))
+            while forwarded:
+                conn.sendall(frame(b'S', forwarded.pop(0).encode()))
+            readers = [conn] + ([0] if stdin_open else [])
+            try:
+                r, _, _ = select.select(readers, [], [], 0.5)
+            except InterruptedError:
+                continue
+            if 0 in r:
+                data = os.read(0, CHUNK)
+                if data:
+                    conn.sendall(frame(b'I', data))
+                else:
+                    stdin_open = False
+                    if not interactive:
+                        conn.sendall(frame(b'D'))
+                    else:
+                        # a terminal whose input ended: the session is over
+                        conn.shutdown(socket.SHUT_WR)
+            if conn in r:
+                data = conn.recv(CHUNK * 4)
+                if not data:
+                    if status == 1:
+                        sys.stderr.write('\r\nas-agent: the connection to the agent side closed\r\n' if interactive else 'as-agent: the connection to the agent side closed\n')
+                    break
+                buf += data
+                done = False
+                while len(buf) >= 5:
+                    length = struct.unpack('>I', bytes(buf[1:5]))[0]
+                    if len(buf) < 5 + length:
+                        break
+                    kind, body = bytes(buf[0:1]), bytes(buf[5:5 + length])
+                    del buf[:5 + length]
+                    if kind == b'O':
+                        write_all(1, body)
+                    elif kind == b'E':
+                        write_all(2, body)
+                    elif kind == b'X':
+                        try:
+                            status = int(json.loads(body).get('code', 1))
+                        except (ValueError, AttributeError):
+                            status = 1
+                        done = True
+                    elif kind == b'F':
+                        status = 77
+                        write_all(2, (b'as-agent: refused (' + body[:60] + b')\r\n') if interactive else (b'as-agent: refused (' + body[:60] + b')\n'))
+                        done = True
+                if done:
+                    break
+    finally:
+        if saved is not None:
+            termios.tcsetattr(0, termios.TCSADRAIN, saved)
+    return status
+
+
+def write_all(fd, data):
+    while data:
+        try:
+            n = os.write(fd, data)
+        except BlockingIOError:
+            select.select([], [fd], [], 1.0)
+            continue
+        except BrokenPipeError:
+            return
+        data = data[n:]
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except (BrokenPipeError, ConnectionResetError):
+        sys.exit(1)

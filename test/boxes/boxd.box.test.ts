@@ -64,7 +64,7 @@ beforeAll(async () => {
     // Stand-in box image: alpine with the version label, /home/agent owned by the box user, a long sleep
     await must('run', '--name', IMGSRC, 'alpine:latest', 'sh', '-c', 'mkdir -p /home/agent && chown 1000:1000 /home/agent');
     await must('commit', '--change', 'LABEL org.agora.box.version=1', '--change', 'CMD ["sleep", "1000000"]', '--change', 'WORKDIR /home/agent',
-        // sleep as PID 1 ignores SIGTERM; the real image runs tini
+        // sleep as PID 1 ignores SIGTERM; the real image's PID 1 is agora-box-init, which handles it
         '--change', 'STOPSIGNAL SIGKILL', IMGSRC, IMAGE);
     await docker('rm', '-f', IMGSRC);
     // Stand-in edge: any container with the edge's name
@@ -141,16 +141,21 @@ describe('boxd on a real engine', () => {
         expect(info.State.Running).toBe(true);
         expect(info.HostConfig.ReadonlyRootfs).toBe(true);
         expect(info.HostConfig.CapDrop).toEqual(['ALL']);
+        // The init's four, no more; the container starts as root only so the init can start the two users apart
+        expect([...info.HostConfig.CapAdd].map((x: string) => x.replace(/^CAP_/, '')).sort()).toEqual(['KILL', 'SETGID', 'SETPCAP', 'SETUID']);
+        expect(info.Config.User).toBe('0:0');
         expect(info.HostConfig.ExtraHosts).toEqual([`edge:${at(2)}`]);
         expect(envOf(info).AGORA_BOX_GENERATION).toBe('1');
         expect(info.Mounts.map((m: any) => m.Name)).toEqual([vol]);
 
-        // Inside: the box user, a read-only root, the pinned edge, a private /run/agora
-        const inside = await must('exec', c, 'sh', '-c', 'id -u; grep -w edge /etc/hosts; touch /etc/x 2>&1 || echo ro; stat -c "%a %u" /run/agora; touch /home/agent/ok && echo home-rw');
+        // Inside, as the agent: a read-only root, the pinned edge, a private /run/agora, the operator's home and the as-agent channel
+        const inside = await must('exec', '-u', '1000', c, 'sh', '-c', 'id -u; grep -w edge /etc/hosts; touch /etc/x 2>&1 || echo ro; stat -c "%a %u" /run/agora; stat -c "home-operator %a %u" /home/operator; stat -c "as-agent %a %u %g" /run/as-agent; touch /home/agent/ok && echo home-rw');
         expect(inside).toContain('1000');
         expect(inside).toContain(at(2));
         expect(inside).toContain('ro');
         expect(inside).toContain('700 1000');
+        expect(inside).toContain('home-operator 700 1001');
+        expect(inside).toContain('as-agent 710 1000 1001');
         expect(inside).toContain('home-rw');
     });
 
@@ -183,7 +188,7 @@ describe('boxd on a real engine', () => {
     });
 
     it('rebuild replaces the container with a new generation and keeps the home volume', async () => {
-        await must('exec', c, 'sh', '-c', 'echo kept > /home/agent/marker');
+        await must('exec', '-u', '1000', c, 'sh', '-c', 'echo kept > /home/agent/marker');
         const before = (await inspect(c)).Id;
         store.request(boxId, 'rebuild');
         await r.pass();
@@ -192,7 +197,7 @@ describe('boxd on a real engine', () => {
         expect(envOf(after).AGORA_BOX_GENERATION).toBe('2');
         expect(after.Config.Labels['org.agora.box.generation']).toBe('2');
         expect(store.get(boxId).state).toBe('running');
-        expect(await must('exec', c, 'cat', '/home/agent/marker')).toBe('kept');
+        expect(await must('exec', '-u', '1000', c, 'cat', '/home/agent/marker')).toBe('kept');
     });
 
     it('refuses to start a container that is not what boxd made', async () => {
@@ -218,8 +223,8 @@ describe('boxd on a real engine', () => {
         await r.pass();
         expect(store.get(boxId).state).toBe('running');
         expect(store.get(boxId).generation).toBe(gen + 1);
-        expect((await inspect(c)).HostConfig.CapAdd ?? []).toEqual([]);
-        expect(await must('exec', c, 'cat', '/home/agent/marker')).toBe('kept');
+        expect([...(await inspect(c)).HostConfig.CapAdd].map((x: string) => x.replace(/^CAP_/, '')).sort()).toEqual(['KILL', 'SETGID', 'SETPCAP', 'SETUID']);
+        expect(await must('exec', '-u', '1000', c, 'cat', '/home/agent/marker')).toBe('kept');
     });
 
     it('reset replaces the home volume', async () => {
@@ -228,7 +233,7 @@ describe('boxd on a real engine', () => {
         await r.pass();
         expect(store.get(boxId).state).toBe('running');
         expect(store.get(boxId).generation).toBe(gen + 1);
-        expect((await docker('exec', c, 'cat', '/home/agent/marker')).code).not.toBe(0);
+        expect((await docker('exec', '-u', '1000', c, 'cat', '/home/agent/marker')).code).not.toBe(0);
     });
 
     it('delete removes container and network, keeps the volume until purge', async () => {

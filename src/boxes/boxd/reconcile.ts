@@ -285,6 +285,7 @@ export class Reconciler {
             subnet,
             limits: box,
             hostToken: tokens.hostToken,
+            relayToken: tokens.relayToken,
             botId: tokens.botId,
             botToken: tokens.botToken,
             profile: {

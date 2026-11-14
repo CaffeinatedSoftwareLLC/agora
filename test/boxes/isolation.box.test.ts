@@ -28,11 +28,12 @@ async function checkIsolation(label: string) {
     // B1: mounts. A sees its own home only; no Docker socket; B's volume isn't there.
     const mounts = await inBox(a.container, 'cat /proc/mounts; echo ---; ls -a /home; echo ---; ls -la /var/run/docker.sock 2>&1 || true');
     expect(mounts.stdout, `${label}: mounts`).not.toContain(b.id.toLowerCase());
-    expect(mounts.stdout.split('---')[1].trim().split(/\s+/).filter(n => n !== '.' && n !== '..'), `${label}: /home`).toEqual(['agent']);
+    // (`operator` is the owner's own empty home, a tmpfs mount point the agent cannot enter)
+    expect(mounts.stdout.split('---')[1].trim().split(/\s+/).filter(n => n !== '.' && n !== '..'), `${label}: /home`).toEqual(['agent', 'operator']);
     expect(mounts.stdout, `${label}: docker socket`).toMatch(/No such file|cannot access/);
 
     // B1/B2: B's token strings appear nowhere A can read: files, any process environment.
-    for (const secret of [b.botToken, b.hostToken]) {
+    for (const secret of [b.botToken, b.hostToken, b.relayToken]) {
         // The secret goes in on stdin into grep's pattern file, never onto a command line
         const secretPart = secret.slice(secret.indexOf('.') + 1);
         const files = await inBoxInput(a.container,
@@ -42,9 +43,10 @@ async function checkIsolation(label: string) {
             'exec 3<&0; for f in /proc/[0-9]*/environ /proc/[0-9]*/cmdline; do tr "\\0" "\\n" < "$f" 2>/dev/null; done | grep -cF -f /dev/fd/3 || true', `${secretPart}\n`);
         expect(procs.stdout.trim(), `${label}: processes holding B's token`).toBe('0');
     }
-    // A's own environment carries only A's tokens
-    const env = await inBox(a.container, 'tr "\\0" "\\n" < /proc/1/environ');
+    // A's own environment carries only A's tokens; PID 1 (root) and the operator's processes are not the agent's to read
+    const env = await inBox(a.container, 'env');
     expect(env.stdout).toContain(`AGORA_BOX_ID=${a.id}`);
+    expect((await inBox(a.container, 'cat /proc/1/environ 2>&1')).stdout, `${label}: PID 1`).toMatch(/Permission denied/);
 
     // B3: network. B, the database, Redis, the API and the Docker host are unreachable directly.
     const targets: [string, number][] = [
@@ -128,6 +130,7 @@ describe('box isolation (#39)', () => {
         expect(a.generation).toBeGreaterThan(old.generation);
         expect(a.botToken).not.toBe(old.botToken);
         expect(a.hostToken).not.toBe(old.hostToken);
+        expect(a.relayToken).not.toBe(old.relayToken);
         // The old ones fail from inside the rebuilt box and from outside
         expect((await httpFromBox(a.container, 'http://edge:8080/bots/@me', { auth: `Bot ${old.botToken}` })).status).toBe(401);
         expect((await api('/bots/@me', { auth: `Bot ${old.botToken}` })).status).toBe(401);

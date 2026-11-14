@@ -99,15 +99,19 @@ it('tells the owner what it means before asking for the password, and shows the 
   expect(confirm).toHaveTextContent('not stored or logged');
   // The sharing warning is on the page, not behind a link, and the old safety claim is gone
   for (const line of [
-    'in the same box, as the same user, as an autonomous agent that may be running now',
-    'can read or change what you type and what you see',
-    'It can show a fake prompt. Agora asks for your password only on this page',
-    'Do not type passwords, tokens, login codes or git credentials you would not give the agent',
+    'runs as a separate user in the box (operator), not as the agent',
+    'cannot read or change your shell, its terminal or its files',
+    'Do not run the agent\'s code from your own shell',
+    'as-agent <command>',
+    'on the agent\'s side of the wall: the agent can see it and can show a fake prompt there',
+    'Agora asks for your password only on this page',
+    'Never type a password, token, login code or git credential into the box',
     'New wakes for this agent are paused while the terminal is open',
     'anything started with setsid, nohup or disown keeps running',
-    'that key is in this shell',
+    'it is not in your shell, but it is in what as-agent runs',
   ]) expect(confirm).toHaveTextContent(line);
   expect(confirm.textContent).not.toContain('reaches nothing more than the agent can');
+  expect(confirm.textContent).not.toContain('same user');
   expect(confirm.querySelectorAll('li').length).toBeLessThanOrEqual(10);
   expect(screen.getByRole('button', { name: 'Open terminal' })).toBeDisabled();
   expect(screen.queryByTestId('terminal-takeover')).toBeNull();
@@ -142,7 +146,7 @@ it('opening: ticket, its own socket, the size, the shell, typing, output, resize
   expect(screen.getByTestId('terminal-limits')).toHaveTextContent('15 min without a keystroke');
   const term = terms[0];
   expect(term.focused).toBe(true);
-  expect(screen.getByTestId('terminal-shared-warning')).toHaveTextContent('You share this box with the agent. Treat what you type as visible to it.');
+  expect(screen.getByTestId('terminal-shared-warning')).toHaveTextContent('Your shell is a separate user the agent cannot read or change. What you type in an as-agent session is on the agent\'s side.');
 
   act(() => sockets[0].fire('shell:output', new Uint8Array([104, 105]).buffer));
   expect(Array.from(term.written[0])).toEqual([104, 105]);

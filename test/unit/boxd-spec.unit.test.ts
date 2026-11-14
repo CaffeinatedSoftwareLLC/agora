@@ -11,7 +11,7 @@ const BOX = '01JBXA0000000000000000000Z';
 const input = (over: Partial<BoxSpecInput> = {}): BoxSpecInput => ({
     instance: 'agora', boxId: BOX, generation: 3, image: 'agora/box:1', imageVersion: 1, runtime: 'runsc',
     subnet: '10.213.0.16/28', limits: { cpus: 2, memoryMb: 4096, pids: 1024 },
-    hostToken: 'ah_H.secret', botId: 'B'.repeat(26), botToken: 'bot_T.secret',
+    hostToken: 'ah_H.secret', relayToken: 'ar_H.relay', botId: 'B'.repeat(26), botToken: 'bot_T.secret',
     profile: { name: 'claude-1', adapter: 'claude', auth: 'subscription', apiKeyEnv: null, workdirAlias: 'work', repos: ['acme/app'] },
     apiKey: null,
     ...over,
@@ -31,16 +31,20 @@ describe('boxd container spec', () => {
         const s: any = containerSpec(input());
         expect(s.name).toBe('agora-box-01jbxa0000000000000000000z');
         expect(s.Image).toBe('agora/box:1');
-        expect(s.User).toBe('1000:1000');
+        // Root, only so the init can start the agent (1000) and the owner's relay (1001) apart; it holds four capabilities and gives them up
+        expect(s.User).toBe('0:0');
         expect(s.HostConfig.Runtime).toBe('runsc');
         expect(s.HostConfig.ReadonlyRootfs).toBe(true);
         expect(s.HostConfig.Privileged).toBe(false);
         expect(s.HostConfig.CapDrop).toEqual(['ALL']);
-        expect(s.HostConfig.CapAdd).toEqual([]);
+        expect(s.HostConfig.CapAdd).toEqual(['KILL', 'SETGID', 'SETPCAP', 'SETUID']);
         expect(s.HostConfig.SecurityOpt).toEqual(['no-new-privileges']);
         expect(s.HostConfig.Binds).toEqual([]);
         expect(s.HostConfig.Tmpfs['/tmp']).toContain('size=1g');
         expect(s.HostConfig.Tmpfs['/run/agora']).toBe('rw,noexec,nosuid,nodev,size=1m,mode=0700,uid=1000,gid=1000');
+        // The owner's home: the operator's alone. The as-agent channel: the agent's, traversable by the operator's group only
+        expect(s.HostConfig.Tmpfs['/home/operator']).toBe('rw,nosuid,nodev,size=256m,mode=0700,uid=1001,gid=1001');
+        expect(s.HostConfig.Tmpfs['/run/as-agent']).toBe('rw,noexec,nosuid,nodev,size=1m,mode=0710,uid=1000,gid=1001');
         expect(s.HostConfig.Mounts).toEqual([{ Type: 'volume', Source: 'agora-box-01jbxa0000000000000000000z-home', Target: '/home/agent', ReadOnly: false }]);
         expect(s.HostConfig.RestartPolicy).toEqual({ Name: 'unless-stopped' });
         expect(s.HostConfig.NetworkMode).toBe('agora_box_01jbxa0000000000000000000z');
@@ -64,7 +68,7 @@ describe('boxd container spec', () => {
         const e = env(containerSpec(input()));
         expect(e).toMatchObject({
             AGORA_BOX_ID: BOX, AGORA_BOX_GENERATION: '3', AGORA_INSTANCE_URL: 'http://edge:8080',
-            AGORA_HOST_TOKEN: 'ah_H.secret', AGORA_BOT_ID: 'B'.repeat(26), AGORA_BOT_TOKEN: 'bot_T.secret',
+            AGORA_HOST_TOKEN: 'ah_H.secret', AGORA_RELAY_TOKEN: 'ar_H.relay', AGORA_BOT_ID: 'B'.repeat(26), AGORA_BOT_TOKEN: 'bot_T.secret',
             HTTPS_PROXY: 'http://edge:3128', HTTP_PROXY: 'http://edge:3128', NO_PROXY: 'edge', HOME: '/home/agent',
         });
         expect(JSON.parse(e.AGORA_BOX_PROFILE)).toEqual({
@@ -121,14 +125,21 @@ describe('boxd start check (drift)', () => {
 
     const cases: [string, (i: any) => void][] = [
         ['image', i => { i.Config.Image = 'evil/image:latest'; }],
-        ['user', i => { i.Config.User = '0:0'; }],
+        ['user', i => { i.Config.User = '1000:1000'; }],
+        ['user', i => { i.Config.User = '1001:1001'; }],
         ['runtime', i => { i.HostConfig.Runtime = 'runc'; }],
         ['privileged', i => { i.HostConfig.Privileged = true; }],
         ['read-only', i => { i.HostConfig.ReadonlyRootfs = false; }],
         ['cap-drop', i => { i.HostConfig.CapDrop = []; }],
         ['cap-add', i => { i.HostConfig.CapAdd = ['SYS_ADMIN']; }],
+        ['cap-add', i => { i.HostConfig.CapAdd = ['KILL', 'SETGID', 'SETPCAP', 'SETUID', 'SYS_PTRACE']; }],
+        ['cap-add', i => { i.HostConfig.CapAdd = ['KILL', 'SETGID', 'SETUID']; }],
+        ['cap-add', i => { i.HostConfig.CapAdd = []; }],
         ['security-opt', i => { i.HostConfig.SecurityOpt = ['no-new-privileges', 'seccomp=unconfined']; }],
         ['tmpfs', i => { i.HostConfig.Tmpfs['/run/agora'] = 'rw,size=1g'; }],
+        ['tmpfs', i => { i.HostConfig.Tmpfs['/home/operator'] = 'rw,mode=0755,uid=1001,gid=1001'; }],
+        ['tmpfs', i => { i.HostConfig.Tmpfs['/run/as-agent'] = 'rw,mode=0777,uid=1000,gid=1000'; }],
+        ['tmpfs', i => { delete i.HostConfig.Tmpfs['/home/operator']; }],
         ['binds', i => { i.HostConfig.Binds = ['/var/run/docker.sock:/var/run/docker.sock']; }],
         ['mounts', i => { i.Mounts.push({ Type: 'volume', Name: 'agora-box-other-home', Destination: '/mnt' }); }],
         ['mounts', i => { i.Mounts[0].Name = 'agora-box-01jbxb0000000000000000000z-home'; }],
@@ -149,6 +160,12 @@ describe('boxd start check (drift)', () => {
             expect(containerDrift(info, expected())).toContain(field);
         });
     }
+
+    it('accepts the capability names however Docker spells them (SETUID or CAP_SETUID, any order)', () => {
+        const info = good();
+        info.HostConfig.CapAdd = ['CAP_SETUID', 'CAP_SETPCAP', 'CAP_KILL', 'CAP_SETGID'];
+        expect(containerDrift(info, expected())).toEqual([]);
+    });
 
     it('treats generation and limits as reasons to rebuild, not drift', () => {
         const info = good();

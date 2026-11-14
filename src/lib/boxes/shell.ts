@@ -9,8 +9,11 @@ import { generateUlid } from '../../utils/ulid';
  * bytes through and keeps their count.
  */
 
-/** The terminal protocol this server speaks (agora-host's box-shell.ts sends the same number). */
-export const SHELL_PROTOCOL = 1;
+/**
+ * The terminal protocol this server speaks (the box relay, agora-host's box-shell.ts, sends the
+ * same number). 2: the relay is its own process and credential, apart from the agent's agora-host.
+ */
+export const SHELL_PROTOCOL = 2;
 
 /** A ticket is good for this long after it is issued, once. */
 export const TICKET_TTL_SECONDS = 30;

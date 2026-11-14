@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-    api, boxAction, compose, createBox, docker, inBox, inspectBox, instance, psql, sh, shEnv, until, waitRunning,
+    api, boxAction, compose, createBox, docker, inBox, inspectBox, instance, OPERATOR, psql, sh, shEnv, until, waitRunning,
     type Box, type Instance,
 } from './harness';
 
@@ -22,6 +22,8 @@ async function hostCheckedInSince(since: string) {
         (await psql(`SELECT h.last_seen_at > '${since}'::timestamptz FROM agent_boxes b JOIN agent_hosts h ON h.id = b.host_id WHERE b.id = '${box.id}'`)) === 't');
 }
 const now = async () => psql('SELECT NOW()');
+/** A shell loop that kills processes by command line (the image has no pkill); the bracket keeps it from matching itself. */
+const killMatching = (pattern: string) => `for f in /proc/[0-9]*/cmdline; do p=\${f#/proc/}; p=\${p%/cmdline}; if tr '\\0' ' ' < $f 2>/dev/null | grep -q '${pattern.replace(/^(.)/, '[$1]')}'; then kill -9 $p; fi; done`;
 const startedAt = async () => JSON.parse((await docker('inspect', box.container)).stdout)[0].State.StartedAt as string;
 
 beforeAll(async () => {
@@ -34,8 +36,24 @@ beforeAll(async () => {
 describe('box recovery', () => {
     it('the box restarts by itself when its agora-host dies', async () => {
         const t = await now();
-        // tini is PID 1; killing agora-host ends tini, Docker restarts the container
-        await inBox(box.container, 'pkill -f agora-host/dist/index.js || kill 1');
+        // agora-box-init is PID 1 (root): the agent can end its own agora-host, not the init. Init ends the
+        // box when either of its two processes goes, and Docker restarts the container
+        await inBox(box.container, killMatching('agora-host/dist/index.js --config'));
+        await until('the container to be running again', async () => JSON.parse((await docker('inspect', box.container)).stdout)[0].State.Running);
+        await hostCheckedInSince(t);
+        expect((await inBox(box.container, 'cat ~/marker')).stdout.trim()).toBe('keep-me');
+    }, 300_000);
+
+    it('the box restarts by itself when the owner\'s terminal relay dies, and the agent cannot be the one to end it', async () => {
+        // The agent cannot signal the operator's relay (or the init): its attempt changes nothing
+        const denied = await inBox(box.container, killMatching('box-relay --token-fd') + '; kill -9 1 2>&1; echo tried');
+        expect(denied.stdout).toContain('tried');
+        await new Promise(r => setTimeout(r, 3000));
+        const started = await startedAt();
+        const t = await now();
+        // The operator's own process may end it: the init then ends the box and Docker restarts it
+        await inBox(box.container, killMatching('box-relay --token-fd'), 60_000, OPERATOR);
+        await until('the container to restart', async () => (await startedAt()) !== started);
         await until('the container to be running again', async () => JSON.parse((await docker('inspect', box.container)).stdout)[0].State.Running);
         await hostCheckedInSince(t);
         expect((await inBox(box.container, 'cat ~/marker')).stdout.trim()).toBe('keep-me');

@@ -189,7 +189,7 @@ export function BoxTerminalPage() {
       <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-surface px-4 py-2">
         <span className="text-sm font-semibold" data-testid="terminal-box-name">Terminal in {name}</span>
         {status && <span className="text-xs text-text-muted">{status.box.adapter} box</span>}
-        {phase === 'live' && <span className="text-xs text-warn" data-testid="terminal-shared-warning">You share this box with the agent. Treat what you type as visible to it.</span>}
+        {phase === 'live' && <span className="text-xs text-warn" data-testid="terminal-shared-warning">Your shell is a separate user the agent cannot read or change. What you type in an as-agent session is on the agent&apos;s side.</span>}
         {phase === 'live' && <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-none text-warn" data-testid="terminal-live">live</span>}
         <span className="grow" />
         {(phase === 'live' || phase === 'connecting') && <Button variant="danger" onClick={close} className="min-h-11 md:min-h-9">Close terminal</Button>}
@@ -209,13 +209,13 @@ export function BoxTerminalPage() {
         <form onSubmit={e => void open(e)} className="flex max-w-xl flex-col gap-3 p-4 text-sm md:p-6" data-testid="terminal-confirm">
           <h1 className="text-base font-semibold">Open a terminal in {name}</h1>
           <ul className="list-disc space-y-1 pl-5 text-text-muted">
-            <li>This shell is in the same box, as the same user, as an autonomous agent that may be running now.</li>
-            <li>That agent can read or change what you type and what you see (shell startup files, programs on the PATH, project hooks, other processes).</li>
-            <li>It can show a fake prompt. Agora asks for your password only on this page, before the terminal opens, never inside the terminal.</li>
-            <li>Do not type passwords, tokens, login codes or git credentials you would not give the agent.</li>
+            <li>Your shell runs as a separate user in the box (<code>operator</code>), not as the agent. An autonomous agent that may be running now cannot read or change your shell, its terminal or its files.</li>
+            <li>Do not run the agent&apos;s code from your own shell. To act as the agent, in its workspace, with its login, use <code>as-agent &lt;command&gt;</code>.</li>
+            <li>What you type in an as-agent session is on the agent&apos;s side of the wall: the agent can see it and can show a fake prompt there. Agora asks for your password only on this page, never inside the terminal.</li>
+            <li>Never type a password, token, login code or git credential into the box.</li>
             <li>New wakes for this agent are paused while the terminal is open{status.activeRun ? '; a run already working keeps going, so you share the box with it' : '; a run already working keeps going'}. The channel is told that a terminal is open.</li>
             <li>Closing the tab ends the shell; anything started with <code>setsid</code>, <code>nohup</code> or <code>disown</code> keeps running.</li>
-            <li>For an agent that runs on an API key, that key is in this shell&apos;s environment.</li>
+            <li>An agent that runs on an API key keeps that key to itself: it is not in your shell, but it is in what <code>as-agent</code> runs.</li>
             <li>
               It closes after {status.limits.idleMinutes} minutes without a keystroke, after {status.limits.maxHours} hours at most, and if the shell prints more than {status.limits.rateKbps} KiB a second. You can change these in the box&apos;s settings.
             </li>

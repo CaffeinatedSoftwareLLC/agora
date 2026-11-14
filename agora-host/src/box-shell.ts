@@ -1,31 +1,28 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { closeSync, readFileSync } from 'node:fs';
 import { io, type Socket } from 'socket.io-client';
-import type { Config, LocalProfile } from './config.js';
-import { childEnv } from './adapters.js';
-import { BOX_HOME, inBox, scratchDir } from './box.js';
+import { inBox, proxyVars } from './box.js';
 import { errorCode } from './client.js';
+import { HostConfigError } from './terms.js';
 
 /**
- * The terminal in a box, box side (docs/box-terminal.md). Agora asks over a socket, the owner's
- * browser types, and this host starts a shell in a pseudo-terminal inside the box and relays
- * bytes: nothing more. What the shell says is never read, logged or stored here.
+ * The owner's terminal in a box, box side (docs/box-terminal.md). Agora asks over a socket, the
+ * owner's browser types, and this relay starts a shell in a pseudo-terminal inside the box and
+ * relays bytes: nothing more. What the shell says is never read, logged or stored here.
  *
- * Boxes only. On a machine agora-host refuses to open a terminal at all: that would be a shell
- * on the owner's own computer, started from a web page. (Allowing it would need an explicit
- * opt-in in the machine's own host config that the server can never switch on.)
+ * This is NOT part of the agent's agora-host. It runs as its own process (`agora-host box-relay`)
+ * of its own Unix user, the operator (uid 1001), started by the box's init with a credential that
+ * only it holds. The agent (uid 1000) cannot read that credential, signal this process, trace it,
+ * read its memory or its environment, or reach the shell's terminal. The shell is the operator's:
+ * it has no host token, bot token or provider key and none of the agent's files in its environment,
+ * and its PATH is root-owned directories only. To act as the agent it uses `as-agent`.
  *
- * The shell is the box user's, in the box user's home folder (not the agent's worktree: the owner
- * chooses to `cd` there), with the environment the agent's CLI gets (childEnv: an allowlist, the
- * CLI's state directory, the proxy variables), so `claude`, `codex` and the rest run in it and are
- * logged in as the agent. The image's root-owned CLI directory comes first on its PATH. It does not
- * get the host or bot token: they reach this process by the config file and are not in anyone's
- * environment (an agent that runs on an API key has that provider key there, as its own runs do).
- * The shell shares the box with an autonomous agent that runs as the same user: see docs/box-terminal.md.
+ * Boxes only. On a machine nothing here runs at all: that would be a shell on the owner's own
+ * computer, started from a web page.
  */
 
-/** The terminal protocol this host speaks; the server's SHELL_PROTOCOL is the same number. */
-export const SHELL_PROTOCOL = 1;
+/** The terminal protocol this relay speaks; the server's SHELL_PROTOCOL is the same number. */
+export const SHELL_PROTOCOL = 2;
 /** The helper that owns the pseudo-terminal (box/agora-pty, a Python script in the image). */
 export const PTY_HELPER = '/opt/agora/agora-pty';
 const OUTPUT_CHUNK = 16 * 1024;
@@ -55,7 +52,7 @@ export interface ShellTransport {
 
 export interface RelayOptions {
     spawnPty: SpawnPty;
-    /** The shell's environment and folder, from the profile (shellSpec) */
+    /** The shell's environment and folder (operatorShellSpec) */
     spec: () => { env: NodeJS.ProcessEnv; cwd: string; command: string[] };
     log(code: string): void;
     now?(): number;
@@ -209,39 +206,44 @@ export const makeHelperPty = (helper: string): SpawnPty => o => {
 };
 export const spawnHelperPty: SpawnPty = makeHelperPty(PTY_HELPER);
 
+/** Where the operator's shell gets its startup file and git configuration: root-owned files of the image. */
+export const OPERATOR_RC = '/opt/agora/operator.bashrc';
+export const OPERATOR_GITCONFIG = '/opt/agora/operator.gitconfig';
+/** The operator's account (box/Dockerfile, boxd's tmpfs). */
+export const OPERATOR_HOME = '/home/operator';
+export const OPERATOR_UID = 1001;
+/** Root-owned directories only: nothing the agent can write is on it, and no `.`. */
+export const OPERATOR_PATH = '/opt/agora/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+
 /**
- * The shell and where it starts, for this box's one profile: bash, interactive, in the box user's
- * home folder (neutral ground: the agent's worktree can hold hooks and files the agent wrote), with
- * the same environment the agent's CLI gets plus a terminal type. One line on open says where the
- * agent's workspace is. `/opt/agora/bin` (root-owned: the image's own claude, codex ...) is FIRST on
- * the PATH, ahead of the agent-writable ~/.npm-global/bin and ~/.local/bin, so a name the agent
- * could shadow resolves to the image's copy. Only this shell's environment changes; the agent's
- * own runs resolve tools as before.
+ * The owner's shell in the box: bash, interactive, as the operator user, in the operator's home.
+ * Built from nothing but fixed values, a terminal type and the proxy variables, so the shell has
+ * no token, no provider key and nothing from the agent's environment. PATH is root-owned
+ * directories only. bash reads the image's root-owned rc file (`--rcfile`, which prints the
+ * banner) and no file of any home; git reads the image's root-owned config only, with hooks and
+ * fsmonitor off and no `safe.directory`, so it refuses the agent's repositories.
  */
-export function shellSpec(config: Config, source: NodeJS.ProcessEnv = process.env, exists: (p: string) => boolean = existsSync) {
-    const local: LocalProfile = Object.values(config.profiles)[0]!;
-    const env = childEnv(local, source);
-    env.TERM = 'xterm-256color';
-    env.COLORTERM = 'truecolor';
-    env.LANG = source.LANG && /^[A-Za-z0-9_.@-]{1,40}$/.test(source.LANG) ? source.LANG : 'C.UTF-8';
-    env.SHELL = '/bin/bash';
-    env.HOME ??= BOX_HOME;
-    // The image's CLI links (claude, codex, devin ...) are in /opt/agora/bin, which only root can write
-    if (inBox(source)) env.PATH = ['/opt/agora/bin', ...(env.PATH ?? '').split(':').filter(p => p && p !== '/opt/agora/bin')].join(':');
-    const workspace = [local.workdir, scratchDir(env.HOME)].find(p => exists(p)) ?? env.HOME;
-    env.AGORA_WORKSPACE = workspace;
-    const cwd = exists(env.HOME) ? env.HOME : '/';
-    // Non-login: a login shell's /etc/profile would replace the PATH the image set (npm and pip installs live in the home folder)
-    const banner = 'printf \'\\033[33magora: this shell is in the same box, as the same user, as the agent. The agent workspace is %s (you start in your home folder; cd there on purpose).\\033[0m\\n\' "$AGORA_WORKSPACE"; exec /bin/bash -i';
-    return { env, cwd, command: ['/bin/bash', '-c', banner] };
+export function operatorShellSpec(source: NodeJS.ProcessEnv = process.env, home = OPERATOR_HOME) {
+    const env: NodeJS.ProcessEnv = {
+        HOME: home, USER: 'operator', LOGNAME: 'operator', SHELL: '/bin/bash', PATH: OPERATOR_PATH,
+        TERM: 'xterm-256color', COLORTERM: 'truecolor',
+        LANG: source.LANG && /^[A-Za-z0-9_.@-]{1,40}$/.test(source.LANG) ? source.LANG : 'C.UTF-8',
+        GIT_CONFIG_GLOBAL: OPERATOR_GITCONFIG, GIT_CONFIG_NOSYSTEM: '1', NPM_CONFIG_UPDATE_NOTIFIER: 'false',
+        ...proxyVars(source),
+    };
+    return { env, cwd: home, command: ['/bin/bash', '--noprofile', '--rcfile', OPERATOR_RC, '-i'] };
 }
 
 // ─── The connection to Agora ───
 
-export interface ShellLoopOptions {
+export interface RelayLoopOptions {
+    /** Agora as the box sees it (the edge): http://edge:8080 */
+    instance: string;
+    /** The relay credential (ar_<hostId>.<secret>); held in memory only */
+    token: string;
     signal: AbortSignal;
     log(code: string): void;
-    /** For tests: the socket factory, the relay's shell and the delays */
+    /** For tests: the socket factory, the shell and the delays */
     connect?: (url: string, auth: Record<string, unknown>) => Socket;
     spawnPty?: SpawnPty;
     retryMinMs?: number;
@@ -249,26 +251,27 @@ export interface ShellLoopOptions {
 }
 
 /**
- * Keep a socket to Agora's gateway (through the edge) as this box's host, and serve terminals on it.
- * Box mode only. A server that doesn't know terminals just refuses the handshake: the loop retries
- * slowly and the runs go on unaffected.
+ * Keep a socket to Agora's gateway (through the edge) as this box's terminal relay, and serve
+ * terminals on it. Box mode only. A server that doesn't know terminals just refuses the
+ * handshake: the loop retries slowly and the agent's runs, which this process has nothing to do
+ * with, go on unaffected.
  */
-export async function boxShellLoop(config: Config, o: ShellLoopOptions): Promise<void> {
-    if (!inBox() || Object.keys(config.profiles).length !== 1) return;
+export async function boxRelayLoop(o: RelayLoopOptions): Promise<void> {
+    if (!inBox()) return;
     const connect = o.connect ?? ((url, auth) => io(url, { transports: ['websocket'], auth, reconnection: false, forceNew: true, timeout: 15000 }));
-    const origin = new URL(config.instance).origin;
+    const origin = new URL(o.instance).origin;
     let delay = o.retryMinMs ?? 5000;
     let lastCode = '';
     while (!o.signal.aborted) {
-        const socket = connect(origin, { type: 'host', token: config.hostToken, shellProtocol: SHELL_PROTOCOL });
-        const relay = new ShellRelay(socket, { spawnPty: o.spawnPty ?? spawnHelperPty, spec: () => shellSpec(config), log: o.log });
+        const socket = connect(origin, { type: 'relay', token: o.token, shellProtocol: SHELL_PROTOCOL });
+        const relay = new ShellRelay(socket, { spawnPty: o.spawnPty ?? spawnHelperPty, spec: () => operatorShellSpec(), log: o.log });
         const outcome = await new Promise<'connected-then-lost' | 'refused'>(resolve => {
             let connected = false;
             const abort = () => { socket.disconnect(); resolve('connected-then-lost'); };
             o.signal.addEventListener('abort', abort, { once: true });
             socket.on('connect', () => { connected = true; delay = o.retryMinMs ?? 5000; lastCode = ''; o.log('box_shell_connected'); });
             socket.on('connect_error', (err: Error) => {
-                // The server's own fixed codes (Invalid host token, unsupported_protocol ...); logged once per change
+                // The server's own fixed codes (Invalid relay token, unsupported_protocol ...); logged once per change
                 const code = /^[A-Za-z0-9_ ]{1,60}$/.test(err.message) ? err.message.toLowerCase().replace(/ /g, '_') : 'connect_failed';
                 if (code !== lastCode) { lastCode = code; o.log(`box_shell_unavailable ${code}`); }
                 socket.disconnect(); resolve('refused');
@@ -283,4 +286,42 @@ export async function boxShellLoop(config: Config, o: ShellLoopOptions): Promise
         delay = lastCode === 'host_already_connected' ? (o.retryMinMs ?? 5000)
             : outcome === 'refused' ? Math.min(delay * 2, o.retryMaxMs ?? 5 * 60 * 1000) : (o.retryMinMs ?? 5000);
     }
+}
+
+/** The relay credential, read once from the descriptor the box's init gave this process alone. */
+export function readRelayToken(fd: number): string {
+    let text = '';
+    try { text = readFileSync(fd, 'utf8').trim(); } finally { try { closeSync(fd); } catch { /* already closed */ } }
+    if (!/^ar_[0-9A-HJKMNP-TV-Z]{26}\.[0-9a-f]{64}$/.test(text)) throw new HostConfigError('The relay credential is missing or malformed');
+    return text;
+}
+
+/**
+ * agora-host box-relay --token-fd <n>: the owner's terminal relay (docs/box-terminal.md), run by
+ * the box's init as the operator user. It reads no config file and never sees the host token, the
+ * bot token or a provider key: the instance address from the environment, the credential from a pipe.
+ * Refuses to run as the agent's user, as root, or outside a box.
+ */
+export async function boxRelayCommand(args: string[], env: NodeJS.ProcessEnv = process.env, o: { uid?: number; signal?: AbortSignal; log?: (c: string) => void; loop?: typeof boxRelayLoop } = {}): Promise<number> {
+    const log = o.log ?? (code => console.error(code));
+    const uid = o.uid ?? (process.getuid ? process.getuid() : -1);
+    if (uid !== OPERATOR_UID) { console.error('box-relay must run as the operator user'); return 2; }
+    if (!inBox(env)) { console.error('box-relay runs only in an agent box'); return 2; }
+    const i = args.indexOf('--token-fd');
+    const fd = i >= 0 ? Number(args[i + 1]) : NaN;
+    if (!Number.isInteger(fd) || fd < 3 || fd > 255) { console.error('Usage: agora-host box-relay --token-fd <fd>'); return 2; }
+    let token: string;
+    try { token = readRelayToken(fd); } catch (err) {
+        console.error(err instanceof HostConfigError ? err.message : 'box_relay_token_unreadable');
+        return 2;
+    }
+    const instance = env.AGORA_INSTANCE_URL?.trim();
+    if (!instance || !/^https?:\/\//.test(instance)) { console.error('AGORA_INSTANCE_URL is not set'); return 2; }
+    const ctl = new AbortController();
+    const stop = () => ctl.abort();
+    process.once('SIGTERM', stop);
+    process.once('SIGINT', stop);
+    const signal = o.signal ?? ctl.signal;
+    await (o.loop ?? boxRelayLoop)({ instance, token, signal, log });
+    return 0;
 }

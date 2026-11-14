@@ -1,5 +1,6 @@
 #!/bin/sh
-# Agent box entrypoint (docs/agent-boxes.md §8.1), run by tini as uid 1000.
+# Agent box entrypoint (docs/agent-boxes.md §8.1), run by agora-box-init as the agent (uid 1000, no
+# capability). The owner's terminal relay is another process of another user (docs/box-terminal.md).
 # Checks the environment boxd set, prepares the home folder (repos, scratch repo, git
 # identity, box rules), writes agora-host's config to /run/agora/host.json and runs
 # agora-host in box mode. Values of AGORA_* variables are never printed.
@@ -29,6 +30,8 @@ adapter=$(printf '%s' "$AGORA_BOX_PROFILE" | jq -r '.adapter')
 state="$HOME/.agora/state/$profile"
 edge="${AGORA_INSTANCE_URL%/}"
 
+# The agent's home is the agent's alone: the owner's account (operator) reads nothing here
+chmod 700 "$HOME"
 mkdir -p "$HOME/work" "$state" "$HOME/.local/bin" "$HOME/.npm-global" "$HOME/.venvs"
 chmod 700 "$HOME/.agora" "$state"
 

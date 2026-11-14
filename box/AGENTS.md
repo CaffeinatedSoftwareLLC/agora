@@ -39,10 +39,16 @@ without asking. Its edges are fixed, and the owner approves anything that crosse
 
 ## The owner's terminal
 
-- The owner can open a terminal in this box from Agora and work in it by hand, in your
-  workspace folder, with your tools and your login. While it is open, Agora wakes you for
+- The owner can open a terminal in this box from Agora and work in it by hand. It is a
+  separate account (`operator`) that you cannot read, signal, trace or type into, and that
+  cannot read your files. To act as you, the owner runs `as-agent <command>`, which runs the
+  command as you, in your workspace, with your login; that is the one place the owner's
+  keystrokes are on your side of the wall. While a terminal is open, Agora wakes you for
   nothing new; a run already working is not stopped. If files change under you, that is
   the owner. When the terminal closes, new wakes resume.
+- Don't try to read, signal or inspect the owner's processes or home, and don't try to
+  use `/run/as-agent`: it serves only the owner's account, and such attempts are not a way
+  around anything, only noise.
 
 ## Credentials
 

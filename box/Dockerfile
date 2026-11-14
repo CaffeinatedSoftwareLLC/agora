@@ -6,7 +6,9 @@
 # tests. The pins are also in the box adapter registry (src/lib/boxes/adapters.ts,
 # agora-host/src/box-adapters.ts); test/unit/box-adapters.unit.test.ts checks they agree.
 # A change to this file, the pinned CLIs or the in-box scripts bumps box/VERSION.
-# Runs with a read-only root, tmpfs /tmp and /run/agora, and /home/agent as a volume.
+# Runs with a read-only root, tmpfs /tmp, /run/agora, /run/as-agent and /home/operator, and /home/agent
+# as a volume. PID 1 is box/agora-box-init, started as root with only the capabilities it needs to
+# start the agent's processes (uid 1000) and the owner's terminal relay (uid 1001) apart.
 
 ARG NODE_IMAGE=node:22-bookworm-slim
 
@@ -28,12 +30,19 @@ RUN cd agora-mcp && npm run build && npm prune --omit=dev --no-audit --no-fund \
 FROM ${NODE_IMAGE} AS base
 ARG BOX_VERSION
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git curl ca-certificates jq ripgrep python3 python3-venv build-essential tini \
+ && apt-get install -y --no-install-recommends git curl ca-certificates jq ripgrep python3 python3-venv build-essential util-linux \
  && rm -rf /var/lib/apt/lists/*
-# uid/gid 1000 is the node image's "node" user; the box's user is "agent"
+# uid/gid 1000 is the node image's "node" user; the agent's user is "agent". The owner's own account
+# is "operator" (1001): its home is a tmpfs boxd mounts, and neither user is in the other's group.
+# The agent's home is closed to everyone else (mode 0700; agora-box-start also sets it on a kept volume).
 RUN userdel --remove node \
  && groupadd --gid 1000 agent \
  && useradd --uid 1000 --gid 1000 --home-dir /home/agent --create-home --shell /bin/bash agent \
+ && chmod 0700 /home/agent \
+ && (getent group operator >/dev/null && groupdel operator || true) \
+ && groupadd --gid 1001 operator \
+ && useradd --uid 1001 --gid 1001 --home-dir /home/operator --no-create-home --shell /bin/bash operator \
+ && install -d -m 0755 -o root -g root /home/operator /run/as-agent \
  && mkdir -p /run/agora /opt/agora/bin && chown 1000:1000 /run/agora && chmod 0700 /run/agora
 COPY box/VERSION /opt/agora/VERSION
 # The build arg must match box/VERSION: the label is what boxd compares
@@ -46,19 +55,28 @@ COPY --from=build /build/agora-host/dist /opt/agora/agora-host/dist
 COPY --from=build /build/agora-mcp/package.json /opt/agora/agora-mcp/package.json
 COPY --from=build /build/agora-mcp/node_modules /opt/agora/agora-mcp/node_modules
 COPY --from=build /build/agora-mcp/dist /opt/agora/agora-mcp/dist
+COPY box/agora-box-init /opt/agora/agora-box-init
 COPY box/agora-box-start /opt/agora/agora-box-start
 COPY box/agora-pr /usr/local/bin/agora-pr
 # The pseudo-terminal behind the owner's terminal in Agora (docs/box-terminal.md): Python's own pty
 # module, so nothing native to build for amd64 or arm64. Root-owned and read-only like the rest of /opt/agora.
 COPY box/agora-pty /opt/agora/agora-pty
+# The owner's side: as-agent (run a command with the agent's rights) and the shell's fixed startup
+# and git files; the agent's side of as-agent. All root-owned; no file of any home is ever sourced.
+COPY box/as-agent /usr/local/bin/as-agent
+COPY box/as-agent-server /opt/agora/as-agent-server
+COPY box/operator.bashrc /opt/agora/operator.bashrc
+COPY box/operator.gitconfig /opt/agora/operator.gitconfig
 COPY box/AGENTS.md /opt/agora/AGENTS.md
-RUN chmod 0755 /opt/agora/agora-box-start /usr/local/bin/agora-pr /opt/agora/agora-pty && chmod 0644 /opt/agora/AGENTS.md
+RUN chmod 0755 /opt/agora/agora-box-init /opt/agora/agora-box-start /usr/local/bin/agora-pr /opt/agora/agora-pty /usr/local/bin/as-agent /opt/agora/as-agent-server \
+ && chmod 0644 /opt/agora/AGENTS.md /opt/agora/operator.bashrc /opt/agora/operator.gitconfig
 ENV HOME=/home/agent \
     PATH=/home/agent/.npm-global/bin:/home/agent/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     NPM_CONFIG_UPDATE_NOTIFIER=false
 LABEL org.agora.box.version=${BOX_VERSION}
 WORKDIR /home/agent
-ENTRYPOINT ["tini", "--", "/opt/agora/agora-box-start"]
+# PID 1: starts as root (boxd sets the user), then runs the agent and the owner's relay as their own users
+ENTRYPOINT ["/opt/agora/agora-box-init"]
 
 # ---- test: fake CLIs that answer agora-host's headless modes, ACP and the login relay
 FROM base AS test
@@ -73,7 +91,6 @@ RUN chmod 0755 /opt/agora/fake/claude.mjs /opt/agora/fake/codex.mjs /opt/agora/f
  && ln -s /opt/agora/fake/devin.mjs /opt/agora/bin/devin
 COPY box/fake/fake-omp.mjs /opt/agora/fake/omp.mjs
 RUN chmod 0755 /opt/agora/fake/omp.mjs && ln -s /opt/agora/fake/omp.mjs /opt/agora/bin/omp
-USER 1000:1000
 # What agora-host, agora-mcp and box/ were built from (scripts/box-build-id.sh): boxd rebuilds a
 # box whose container has another build than the current image. Last, so it busts no cache.
 ARG BOX_BUILD=
@@ -142,7 +159,6 @@ RUN export HOME=/root \
  && /opt/agora/bin/devin --version \
  && rm -rf /root/.config/devin /root/.local/share/devin /root/.cache/devin
 RUN test -z "$(find /home/agent -mindepth 1 ! -user 1000 -print -quit)"
-USER 1000:1000
 # What agora-host, agora-mcp and box/ were built from (scripts/box-build-id.sh): boxd rebuilds a
 # box whose container has another build than the current image. Last, so it busts no cache.
 ARG BOX_BUILD=

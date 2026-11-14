@@ -15,9 +15,16 @@ ALTER TABLE agent_boxes
     -- Output the shell may send to the browser, KiB per second
     ADD COLUMN terminal_rate_kbps    INTEGER NOT NULL DEFAULT 512 CHECK (terminal_rate_kbps BETWEEN 16 AND 8192);
 
--- The terminal protocol an in-box agora-host speaks, reported when it connects. NULL: it never
--- has (an older box image), and Settings says the box needs its update first.
+-- The terminal protocol a box's terminal relay speaks, reported when it connects. NULL: it never
+-- has (an older box image), and Settings says the box needs its update first. The relay is its own
+-- process, run by its own Unix user, apart from the agent's agora-host (docs/box-terminal.md):
+-- protocol 2. Nothing shipped with protocol 1, where agora-host itself held the terminal.
 ALTER TABLE agent_hosts ADD COLUMN shell_protocol INTEGER;
+
+-- The terminal relay's own credential (ar_<hostId>.<secret>), hashed like the host token's secret.
+-- Minted with the box's generation, delivered only to the relay's Unix user, and the only thing
+-- the terminal hub accepts from a box. The host token (secret_hash) cannot register a terminal.
+ALTER TABLE agent_hosts ADD COLUMN relay_secret_hash TEXT;
 
 -- ─── One row per terminal: who, which box, when, how long, how many bytes ───
 CREATE TABLE box_shell_sessions (

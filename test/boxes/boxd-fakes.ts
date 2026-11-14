@@ -71,7 +71,7 @@ export class MemoryStore implements BoxStore {
         if (!r || r.desiredState === 'deleted') throw new BoxGoneError(boxId);
         r.generation += 1;
         const t = {
-            generation: r.generation, hostId: r.hostId, hostToken: `ah_${r.hostId}.secret${r.generation}`,
+            generation: r.generation, hostId: r.hostId, hostToken: `ah_${r.hostId}.secret${r.generation}`, relayToken: `ar_${r.hostId}.relay${r.generation}`,
             botId: `B${boxId.slice(1)}`, botToken: `bot_${boxId}.secret${r.generation}`,
         };
         this.minted.push(t);
