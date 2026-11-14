@@ -1,7 +1,7 @@
 import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase, setHostKind } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
 import { attachTerminal } from '../../src/lib/terminal-sessions';
-import { hostRefusalNotice } from '../../src/lib/provider-terms';
+import { hostRefusalNotice, startedByNotice } from '../../src/lib/provider-terms';
 
 /**
  * Provider-terms guardrails (docs/provider-terms.md, src/lib/provider-terms.ts).
@@ -225,7 +225,7 @@ describe('subscription profiles: direct messages', () => {
         const since = mark();
         expect((await claim()).status).toBe(204);
         expect(await inbox(s)).toEqual([]);
-        expect(await notices(since)).toEqual([NOTICE('alpha')]);
+        expect(await notices(since)).toEqual([startedByNotice('alpha', 'ptowner', 'ptdirector')]);
     });
 });
 

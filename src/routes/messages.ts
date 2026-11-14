@@ -9,6 +9,7 @@ import { Permissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
 import { parseProtocol, refuseSelfYield } from '../lib/protocol';
 import { cannotDirect, readAuthorities, stampAuthority } from '../lib/direct-agents';
+import { directingActor } from '../lib/owner-bot-authority';
 import { findClientKey, insertWithClientKey } from '../lib/client-key';
 import { handleControlMessage } from '../lib/session-commands';
 import { routeMessage } from '../lib/agent-sessions';
@@ -79,7 +80,7 @@ export async function messageRoutes(app: FastifyInstance) {
 
         // A wake from someone who can't direct would post but wake no one: say so instead.
         // Checked before rate limits so a refused wake doesn't count against the bot.
-        if (requireDirect && !await stampAuthority(db, channelId, userId, !!isBot)) {
+        if (requireDirect && !await directingActor(db, { channelId, userId, isBot: !!isBot, tokenId: request.botTokenId })) {
             return reply.status(403).send(await cannotDirect(db, channelId, userId));
         }
 

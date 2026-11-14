@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { generateUlid } from '../utils/ulid';
 import { canViewChannel } from '../lib/channel-access';
 import { cannotDirect, stampAuthority, isServerOwner } from '../lib/direct-agents';
+import { countingBot } from '../lib/owner-bot-authority';
 import { snapshots } from '../lib/run-stream';
 import { asService } from '../lib/agent-sessions';
 import { limitReached, postNotice, postSessionNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
@@ -250,7 +251,19 @@ export async function agentCommandRoutes(app: FastifyInstance) {
             return reply.send({ sessions: rows.rows.map((r: any) => sessionJson(r, userId)) });
         }
 
-        if (!await stampAuthority(db, channelId, userId, !!request.isBot)) {
+        // Who the command is done as: the caller, or, for a bot that counts as a person (owner bots,
+        // docs/provider-terms.md), that person: their authority, and their name on a session it starts
+        // or resumes. A command to an agent's CLI (control) takes the caller's own authority only.
+        let actorId = userId;
+        let asBotOf: string | null = null;
+        // A counting bot acts as its person even when it holds can_direct itself: a subscription
+        // agent can be started only by its plan owner, and their bot's start is their own start
+        const counting = request.isBot && command !== 'control'
+            ? await asService(db, () => countingBot(db, { botId: userId, tokenId: request.botTokenId, channelId })) : null;
+        if (counting?.personCanDirect) {
+            actorId = counting.personId;
+            asBotOf = counting.personId;
+        } else if (!await stampAuthority(db, channelId, userId, !!request.isBot)) {
             // Only the owner and directors can start, end or resume agent sessions
             return reply.status(403).send(await cannotDirect(db, channelId, userId));
         }
@@ -284,7 +297,8 @@ export async function agentCommandRoutes(app: FastifyInstance) {
             return reply.status(403).send({ error: 'Only the owner can change session budgets' });
         }
         if (command === 'budget' && tokenBudget === undefined) return reply.status(400).send({ error: 'tokenBudget is required' });
-        const who = (await db.query('SELECT username FROM users WHERE id = $1', [userId])).rows[0]?.username ?? 'someone';
+        const nameOf = async (id: string) => (await db.query('SELECT username FROM users WHERE id = $1', [id])).rows[0]?.username ?? 'someone';
+        const who = asBotOf ? `${await nameOf(userId)} (${await nameOf(asBotOf)}'s bot)` : await nameOf(userId);
         const notices: Notice[] = [];
         try {
             const result = await asService(db, async () => {
@@ -319,8 +333,8 @@ export async function agentCommandRoutes(app: FastifyInstance) {
                 }
                 if (command === 'end') return sessionId && !profileName
                     ? endSessionById(db, channelId, sessionId, who, notices) : endSession(db, channelId, profileName, who, notices);
-                if (command === 'resume') return resumeSession(db, channelId, sessionId, onLive, userId, who, notices, tokenBudget);
-                const started = await startSession(db, channelId, profileName, onLive, fresh, userId, who, notices);
+                if (command === 'resume') return resumeSession(db, channelId, sessionId, onLive, actorId, who, notices, tokenBudget);
+                const started = await startSession(db, channelId, profileName, onLive, fresh, actorId, who, notices);
                 if (lurkMode !== undefined) {
                     await db.query('UPDATE agent_sessions SET lurk_mode = $2 WHERE id = $1', [started.body.session.id, lurkMode]);
                     started.body.session.lurkMode = lurkMode;

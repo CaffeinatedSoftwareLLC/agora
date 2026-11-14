@@ -2,10 +2,10 @@ import { createHash, randomBytes } from 'crypto';
 import type { Pool, PoolClient } from 'pg';
 import { generateUlid } from '../utils/ulid';
 import { claimHandoffs } from './handoffs';
-import { readAuthorities } from './direct-agents';
+import { readAuthorities, stampAuthority } from './direct-agents';
 import { duration, expireLiveRequests, fileDeniedTools, hostStatus, openLiveRequest, sleepUntil, takeGrants } from './agent-permissions';
 import { lurkBatchReady } from './agent-lurk';
-import { consumeRunApproval, hostRefusalNotice, ownerBotOf, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, PLAN_OWNER_SQL, SIWC_ERRORS, subscriptionWakesOf, WAKE_AUTH_SQL } from './provider-terms';
+import { consumeRunApproval, hostRefusalNotice, ownerBotOf, runApprovalGate, RUN_APPROVAL_TTL_HOURS, planNotice, startedByNotice, PLAN_OWNER_SQL, SIWC_ERRORS, subscriptionWakesOf, WAKE_AUTH_SQL } from './provider-terms';
 import { SESSION_COMMAND_HOLDS_SQL } from './session-commands';
 import { recordCheckpoint, type CheckpointReport } from './agent-checkpoints';
 import { onRunFinished } from './receipts';
@@ -327,9 +327,10 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     // 4. Recheck each row; rows that fail are acknowledged without work
     const subscription = session.auth_mode !== 'api_key';
     const planOwnerId: string | null = session.plan_owner_id?.trim() ?? null;
+    const ownerBotsOn = subscriptionWakesOf(session.subscription_wakes) === 'owner_bots';
     const kept = await recheckRows(c, channelId, rows, subscription
-        ? { startedByOwner: !!session.started_by_owner, planOwnerId, ownerBots: subscriptionWakesOf(session.subscription_wakes) === 'owner_bots' }
-        : null);
+        ? { startedByOwner: !!session.started_by_owner, planOwnerId, ownerBots: ownerBotsOn }
+        : null, ownerBotsOn);
     // Turning lurk off invalidates pending passive work, including retry batches.
     for (let i = kept.length - 1; i >= 0; i--) {
         if (kept[i].row.reason === 'lurk' && !session.lurk_mode) kept.splice(i, 1);
@@ -344,7 +345,13 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
         }
         // Work dropped only because someone other than the plan owner started this session
         if (subscription && !session.started_by_owner && rows.some((r: any) => r.reason !== 'lurk')) {
-            notices.push(await postNotice(c, channelId, planNotice(session.profile_name, session.auth_mode, !!planOwnerId)));
+            // The session's starter is the blocker for everyone, the plan owner included: say so and how to fix it
+            const named = planOwnerId
+                ? (await c.query('SELECT id, username FROM users WHERE id = ANY($1)', [[planOwnerId, session.started_by?.trim() ?? planOwnerId]])).rows : [];
+            const nameOf = (id: string | null | undefined) => named.find((u: any) => u.id.trim() === id?.trim())?.username ?? null;
+            notices.push(await postNotice(c, channelId, session.auth_mode === 'siwc' || !planOwnerId
+                ? planNotice(session.profile_name, session.auth_mode, !!planOwnerId)
+                : startedByNotice(session.profile_name, nameOf(planOwnerId) ?? 'the owner', nameOf(session.started_by))));
         }
         return null;
     }
@@ -481,7 +488,8 @@ async function strictAuthorOk(c: PoolClient, botId: string, tokenId: string | nu
  * after a switch to owner_only is the only rule left.
  */
 async function recheckRows(c: PoolClient, channelId: string, rows: any[],
-                           terms: { startedByOwner: boolean; planOwnerId: string | null; ownerBots: boolean } | null = null) {
+                           terms: { startedByOwner: boolean; planOwnerId: string | null; ownerBots: boolean } | null = null,
+                           ownerBotsOn = false) {
     if (rows.length === 0) return [];
     const msgs = await c.query(
         `SELECT m.id, m.thread_id, m.author_id, m.content, m.created_at, m.author_could_direct, m.deleted_at,
@@ -521,6 +529,15 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[],
             const key = `${m.author_id.trim()}:${tokenId}`;
             if (!ownerBots.has(key)) ownerBots.set(key, await ownerBotOf(c, { botId: m.author_id.trim(), tokenId, channelId }) === terms.planOwnerId);
             ownerBot = ownerBots.get(key)!;
+        } else if (!terms && ownerBotsOn && m.author_bot && m.author_active && m.author_bot_owner) {
+            // An agent anyone who can direct may wake: the owner's own bot has its owner's authority for the post
+            // (owner-bot-authority.ts), when the owner could direct here. The post keeps its own stamp (no [OWNER]).
+            const key = `${m.author_id.trim()}:${tokenId}`;
+            if (!ownerBots.has(key)) {
+                const person = await ownerBotOf(c, { botId: m.author_id.trim(), tokenId, channelId });
+                ownerBots.set(key, !!person && await stampAuthority(c, channelId, person, false));
+            }
+            ownerBot = ownerBots.get(key)!;
         }
         if (row.reason === 'direct' && !authority && !ownerBot) continue;
         // A session notice from /start or /resume: no author, valid while the session is live
@@ -553,7 +570,7 @@ async function recheckRows(c: PoolClient, channelId: string, rows: any[],
                 authority,
                 content: m.content,
                 createdAt: new Date(m.created_at).toISOString(),
-                ...(terms ? { ownerBot } : {}),
+                ...(terms || ownerBot ? { ownerBot } : {}),
             },
         });
     }

@@ -1010,7 +1010,7 @@ export function registerTools(
 
     server.tool(
         'session_start',
-        'Start (or resume) an agent session in a channel from a profile, so the agent host wakes that agent when it is addressed. If the agent already has a live session there, on_live decides: "ask" (default) reports it, "keep" leaves it, "shelve" shelves it and starts a new one. Needs can_direct.',
+        'Start (or resume) an agent session in a channel from a profile, so the agent host wakes that agent when it is addressed. If the agent already has a live session there, on_live decides: "ask" (default) reports it, "keep" leaves it, "shelve" shelves it and starts a new one. Needs can_direct, or a personal token on your owner's own bot (then it starts as your owner, which an agent on the owner's subscription requires).',
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
             profile: z.string().describe('Profile name, e.g. "codex"'),
@@ -1097,7 +1097,7 @@ export function registerTools(
 
     server.tool(
         'session_wake',
-        'Wake an agent that has a live session in this channel by posting a message that mentions it. The agent host starts that agent with your message. Needs can_direct in the channel: without it this fails and nothing is posted.',
+        'Wake an agent that has a live session in this channel by posting a message that mentions it. The agent host starts that agent with your message. Needs can_direct in the channel, or a token that counts as your owner (their own bot): without either this fails and nothing is posted.',
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
             profile: z.string().describe('Profile name of the agent to wake'),

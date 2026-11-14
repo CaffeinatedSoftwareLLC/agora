@@ -167,6 +167,29 @@ export async function ownerBotOf(db: any, input: { botId: string; tokenId: strin
     return row?.bot_owner_id?.trim() ?? null;
 }
 
+/**
+ * The channel notice for a wake of the plan owner's session by one of their own bots, refused
+ * because someone else started (or last resumed) the session. `owner`: the plan owner,
+ * `starter`: who started it, when known. The fix is the plan owner's: a start by them is the
+ * only thing that makes the session theirs (the rule: a subscription agent runs only for its plan owner).
+ */
+export function startedByNotice(agent: string, owner: string, starter: string | null): string {
+    const by = starter && starter !== owner ? `${starter} started ${agent}'s session` : `${agent}'s session wasn't started by ${owner}`;
+    return `${by}, so ${owner}'s agents can't wake it (a subscription agent runs only for the person whose plan it is). `
+        + `${owner} can end it with /end ${agent} and start it again with /start ${agent}, or resume it with /resume if it is shelved.`;
+}
+
+/**
+ * An owner's own bot @mentioned a subscription agent while the server is set to "Only you"
+ * (subscription_wakes 'owner_only'): then only the owner's own message wakes it directly, and a
+ * bot only hands off. Names the setting and the one change that lets the bot wake it.
+ */
+export function ownerOnlyNotice(bot: string, agent: string, owner: string): string {
+    return `${bot} is ${owner}'s bot, but this server is set to Only you (Settings → Agents, Who can wake subscription agents), `
+        + `so only ${owner}'s own messages wake ${agent} directly; bots only hand off. `
+        + `${owner} can set it to "You and your own agents" so ${bot} can wake ${agent}, or post the message instead.`;
+}
+
 /** The channel notice for a wake the plan-owner rule refused. */
 export function planNotice(agent: string, authMode: string | null | undefined, connected = true): string {
     if (authMode !== 'siwc') return subscriptionNotice(agent);

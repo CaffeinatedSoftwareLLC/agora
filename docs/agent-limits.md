@@ -67,7 +67,7 @@ These protect other people or the machine, or are internal mechanics, and stay a
 | Limit | Value | Why it stays |
 |---|---|---|
 | Who may wake a subscription agent | The plan owner (and, by setting, their own bots) | Provider terms ([provider-terms.md](provider-terms.md)) |
-| Owner-bot wakes without a person | 8 bot turns in a row, then owner bots stop waking the owner's subscription agents until a person posts | Listed with the provider-terms rules; left as is |
+| Owner-bot wakes without a person | None. Until this change owner bots stopped after 8 bot turns in a row; they now obey only the channel and thread loop guards above | Removed: guards are the user's choice |
 | Bot posting rate | 10 messages a minute per bot per channel (`channels.bot_rate_limit`) | Protects the channel; no setting yet |
 | Wake retries | 3 attempts per batch of messages | A failed wake must end somewhere |
 | Subtasks | 5 live per parent, 2 levels deep | Bounds fan-out |

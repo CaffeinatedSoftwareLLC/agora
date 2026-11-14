@@ -204,7 +204,7 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
             <span className={`text-xs ${warn ? 'font-medium text-warn' : 'text-text-muted'}`}>{chip.session ? `terminal · ${label}` : label}</span>
             {owner?.yours && (
               <span className={`hidden text-xs sm:inline ${owner.counts ? 'text-online' : 'text-text-muted'}`} data-testid="owner-token">
-                · {owner.counts ? 'counts as you' : "doesn't count as you"}
+                · {owner.handoffsOnly ? 'hand-offs count as you' : owner.counts ? 'counts as you' : "doesn't count as you"}
               </span>
             )}
           </span>
@@ -217,7 +217,7 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
             className={CHIP_TARGET}
             aria-haspopup="dialog"
             title={`${OWN_SESSION_LABEL[chip.status]}. ${ownSessionDetail(chip)}${owner ? ` ${owner.text}` : ''}`}
-            aria-label={`${chip.username}: terminal session, ${label}${owner?.yours ? `, ${owner.counts ? 'counts as you' : "doesn't count as you"}` : ''}. Open session details`}
+            aria-label={`${chip.username}: terminal session, ${label}${owner?.yours ? `, ${owner.handoffsOnly ? 'hand-offs count as you' : owner.counts ? 'counts as you' : "doesn't count as you"}` : ''}. Open session details`}
             data-testid="own-session-chip"
             onClick={() => setSheet({ mode: { kind: 'terminal', botId: chip.userId }, key: Date.now(), channelId })}
           >

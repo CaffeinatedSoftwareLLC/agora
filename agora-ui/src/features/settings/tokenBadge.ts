@@ -32,7 +32,7 @@ export function tokenBadge(token: BotToken, viewerId: string | undefined, botOwn
   if (token.countsAsYou) {
     return {
       label: 'Counts as you', tone: 'counts',
-      title: 'A token on your own bot that no one else made. Agents using it count as you: they wake subscription agents you started.',
+      title: 'A token on your own bot that no one else made. Agents using it count as you: they wake your agents like you do. A subscription agent someone else started stays asleep until you restart it.',
     };
   }
   // Someone other than the bot's owner made it: it counts as no one
@@ -52,6 +52,6 @@ export function tokenBadge(token: BotToken, viewerId: string | undefined, botOwn
   }
   return {
     label: 'Counts as its owner', tone: 'owner',
-    title: "A token its owner made (or from before Agora recorded makers). Agents using it count as the bot's owner and wake subscription agents they started.",
+    title: "A token its owner made (or from before Agora recorded makers). Agents using it count as the bot's owner and wake the owner's agents like the owner does. A subscription agent someone else started stays asleep until the owner restarts it.",
   };
 }

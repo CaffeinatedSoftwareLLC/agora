@@ -118,17 +118,22 @@ const OWNER_TOKEN_REASON: Record<OwnerTokenReason, string> = {
  * messages and hand-offs wake the owner's subscription agents)? null for hosted sessions, or a
  * server that doesn't say.
  */
-export function ownerTokenNote(s: AgentSession): { counts: boolean; yours: boolean; text: string } | null {
+export function ownerTokenNote(s: AgentSession): { counts: boolean; yours: boolean; text: string; handoffsOnly: boolean } | null {
   if (s.kind !== 'terminal' || typeof s.ownerToken !== 'boolean') return null;
   const yours = !!s.ownedByYou;
   if (s.ownerToken) {
-    // With Only you set (owner_only, #361), only its hand-offs count
-    const what = s.subscriptionWakes === 'owner_only' ? 'Its hand-offs' : 'Its messages and hand-offs';
-    return { counts: true, yours, text: yours ? `${what} wake subscription agents you started.` : `Counts as its owner: ${what.toLowerCase()} wake subscription agents the owner started.` };
+    // With Only you set (owner_only, #361), only its hand-offs count, to subscription agents the owner started
+    if (s.subscriptionWakes === 'owner_only') {
+      return { counts: true, handoffsOnly: true, yours, text: yours ? 'Its hand-offs wake subscription agents you started. It cannot wake them with an @mention: Settings → Agents is set to Only you.' : 'Counts as its owner: its hand-offs wake subscription agents the owner started. It cannot wake them with an @mention: the server is set to Only you.' };
+    }
+    // What the server enforces (src/lib/agent-sessions.ts): the owner's authority for the post, and the plan-owner rule's started-by check
+    return { counts: true, handoffsOnly: false, yours, text: yours
+      ? 'Its messages wake your agents like yours do. A subscription agent someone else started stays asleep until you restart it.'
+      : "Counts as its owner: its messages wake the owner's agents like theirs do. A subscription agent someone else started stays asleep until the owner restarts it." };
   }
   const why = s.ownerTokenReason ?? 'other_bot_owner';
   const reason = OWNER_TOKEN_REASON[why] ?? OWNER_TOKEN_REASON.other_bot_owner;
-  return { counts: false, yours, text: `This terminal won't wake subscription agents: ${reason}.` };
+  return { counts: false, handoffsOnly: false, yours, text: `This terminal won't wake subscription agents: ${reason}.` };
 }
 
 export interface AgentProfile {

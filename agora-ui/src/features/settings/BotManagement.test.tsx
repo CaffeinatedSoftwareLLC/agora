@@ -283,7 +283,7 @@ describe('token badges: who each token counts as', () => {
     await openBot(ME);
     for (const name of ['laptop', 'old terminal']) {
       expect(badge(name)).toHaveTextContent('Counts as you');
-      expect(badge(name)).toHaveAttribute('title', expect.stringContaining('wake subscription agents you started'));
+      expect(badge(name)).toHaveAttribute('title', expect.stringContaining('wake your agents like you do'));
     }
     expect(badge('agent host')).toHaveTextContent('Your own runs only');
     expect(badge('agent host')).toHaveAttribute('title', expect.stringContaining("An API-key agent's runs never count"));
