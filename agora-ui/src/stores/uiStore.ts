@@ -10,7 +10,7 @@ export type AuxView = 'thread' | 'files' | 'members' | 'project' | 'tasks' | 'ca
 /** What the canvas pane shows: an artifact (a version, or the latest when null), or the channel's list. */
 export interface CanvasTarget { channelId: string; artifactId: string | null; version: number | null }
 export interface Overlay {
-  kind: 'session-sheet' | 'message-actions' | 'modal';
+  kind: 'session-sheet' | 'message-actions' | 'modal' | 'notifications';
   id: string;
   onClose: () => void;
 }

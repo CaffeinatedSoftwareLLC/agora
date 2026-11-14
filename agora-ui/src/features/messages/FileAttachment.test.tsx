@@ -65,4 +65,18 @@ describe('FileAttachment keyboard access', () => {
     expect(screen.queryByRole('button', { name: 'Close image cat.png' })).not.toBeInTheDocument();
     expect(thumb).toHaveFocus();
   });
+
+  // Message rows are positioned with a transform, which makes the row the containing block of a
+  // `fixed` child: the lightbox was clipped to the row. It lives on document.body instead.
+  it('the expanded image is portaled out of the (transformed) message row', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<div style={{ transform: 'translateY(10px)' }}>
+      <FileAttachment attachment={attachment({ name: 'cat.png', mime: 'image/png', width: 100, height: 100 })} />
+    </div>);
+    await waitFor(() => expect(screen.getByRole('img', { name: 'cat.png' })).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'Open image cat.png' }));
+    const close = screen.getByRole('button', { name: 'Close image cat.png' });
+    expect(container.contains(close)).toBe(false);
+    expect(close.parentElement).toBe(document.body);
+  });
 });
