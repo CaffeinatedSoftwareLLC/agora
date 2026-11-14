@@ -201,7 +201,7 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
         </p>
         {owner && (
           <p data-testid="terminal-owner-token" className={`rounded-lg border p-3 ${owner.counts ? 'border-online/40 text-text' : 'border-border text-text-muted'}`}>
-            {owner.yours && <span className="font-medium">{owner.counts ? 'Counts as you. ' : "Doesn't count as you. "}</span>}
+            {owner.yours && <span className="font-medium">{owner.handoffsOnly ? 'Hand-offs count as you. ' : owner.counts ? 'Counts as you. ' : "Doesn't count as you. "}</span>}
             {owner.text}
           </p>
         )}

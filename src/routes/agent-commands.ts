@@ -2,6 +2,8 @@ import { FastifyInstance } from 'fastify';
 import { generateUlid } from '../utils/ulid';
 import { canViewChannel } from '../lib/channel-access';
 import { cannotDirect, stampAuthority, isServerOwner } from '../lib/direct-agents';
+import { countingBot } from '../lib/owner-bot-authority';
+import { displayName } from '../lib/message-envelope';
 import { snapshots } from '../lib/run-stream';
 import { asService } from '../lib/agent-sessions';
 import { limitReached, postNotice, postSessionNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
@@ -82,6 +84,7 @@ export function sessionJson(r: any, viewerId?: string) {
             ownerTokenReason: r.owner_token_state === 'ok' ? null : (r.owner_token_state ?? 'other_bot_owner') as OwnerTokenState,
             // The server's setting: with 'owner_only' a counting terminal wakes subscription agents by hand-offs only
             subscriptionWakes: r.subscription_wakes ?? null,
+            actsAsOwner: r.bot_acts_as_owner !== false, tokenPurpose: r.token_purpose ?? null,
             ...(viewerId ? { ownedByYou: !!r.bot_owner_id && r.bot_owner_id.trim() === viewerId.trim() } : {}),
         } : {}),
     };
@@ -91,6 +94,7 @@ export function sessionJson(r: any, viewerId?: string) {
 // A terminal session has no profile: it is named after its bot
 export const SESSION_SELECT = `SELECT s.*, COALESCE(p.name, u.username) AS profile_name, u.username AS bot_username, COALESCE(s.token_budget, p.token_budget) AS effective_token_budget, p.wake_budget,
         p.auth_mode, p.host_mode, p.run_approval, p.plan_owner_id, p.adapter,
+        u.bot_acts_as_owner, (SELECT t.purpose FROM bot_tokens t WHERE t.id = s.token_id AND t.revoked_at IS NULL) AS token_purpose,
         (SELECT json_build_object('command', c.command, 'status', c.status) FROM agent_session_commands c WHERE c.session_id = s.id AND ${LIVE_COMMAND_SQL('c.')} ORDER BY c.id DESC LIMIT 1) AS pending_command,
         COALESCE((SELECT h.kind = 'box' FROM agent_hosts h WHERE h.id = p.host_id), false) AS boxed,
         (SELECT json_build_object('id', btrim(r.id), 'status', r.status, 'startedAt', r.created_at,
@@ -250,7 +254,19 @@ export async function agentCommandRoutes(app: FastifyInstance) {
             return reply.send({ sessions: rows.rows.map((r: any) => sessionJson(r, userId)) });
         }
 
-        if (!await stampAuthority(db, channelId, userId, !!request.isBot)) {
+        // Who the command is done as: the caller, or, for a bot that counts as a person (owner bots,
+        // docs/provider-terms.md), that person: their authority, and their name on a session it starts
+        // or resumes. A command to an agent's CLI (control) takes the caller's own authority only.
+        let actorId = userId;
+        let asBotOf: string | null = null;
+        // A counting bot acts as its person even when it holds can_direct itself: a subscription
+        // agent can be started only by its plan owner, and their bot's start is their own start
+        const counting = request.isBot && command !== 'control'
+            ? await asService(db, () => countingBot(db, { botId: userId, tokenId: request.botTokenId, channelId })) : null;
+        if (counting?.personCanDirect) {
+            actorId = counting.personId;
+            asBotOf = counting.personId;
+        } else if (!await stampAuthority(db, channelId, userId, !!request.isBot)) {
             // Only the owner and directors can start, end or resume agent sessions
             return reply.status(403).send(await cannotDirect(db, channelId, userId));
         }
@@ -284,7 +300,13 @@ export async function agentCommandRoutes(app: FastifyInstance) {
             return reply.status(403).send({ error: 'Only the owner can change session budgets' });
         }
         if (command === 'budget' && tokenBudget === undefined) return reply.status(400).send({ error: 'tokenBudget is required' });
-        const who = (await db.query('SELECT username FROM users WHERE id = $1', [userId])).rows[0]?.username ?? 'someone';
+        const nameOf = async (id: string) => displayName((await db.query('SELECT username FROM users WHERE id = $1', [id])).rows[0]?.username ?? 'someone');
+        const who = asBotOf ? `${await nameOf(userId)} (${await nameOf(asBotOf)}'s bot)` : await nameOf(userId);
+        // A bot acting as its person may not reset what the person set: a fresh session, or replacing a live one, starts clean
+        // of its limits. (A start that would pick up a limit-stopped session is refused below, as /resume is.)
+        if (asBotOf && command === 'start' && (fresh || onLive === 'shelve')) {
+            return reply.status(403).send({ error: 'needs_person', message: `${await nameOf(userId)} acts as ${await nameOf(asBotOf)} but can't start a fresh session or shelve a live one: that resets its limits and needs ${await nameOf(asBotOf)} in person.` });
+        }
         const notices: Notice[] = [];
         try {
             const result = await asService(db, async () => {
@@ -319,8 +341,8 @@ export async function agentCommandRoutes(app: FastifyInstance) {
                 }
                 if (command === 'end') return sessionId && !profileName
                     ? endSessionById(db, channelId, sessionId, who, notices) : endSession(db, channelId, profileName, who, notices);
-                if (command === 'resume') return resumeSession(db, channelId, sessionId, onLive, userId, who, notices, tokenBudget);
-                const started = await startSession(db, channelId, profileName, onLive, fresh, userId, who, notices);
+                if (command === 'resume') return resumeSession(db, channelId, sessionId, onLive, actorId, who, notices, tokenBudget);
+                const started = await startSession(db, channelId, profileName, onLive, fresh, actorId, who, notices);
                 if (lurkMode !== undefined) {
                     await db.query('UPDATE agent_sessions SET lurk_mode = $2 WHERE id = $1', [started.body.session.id, lurkMode]);
                     started.body.session.lurkMode = lurkMode;

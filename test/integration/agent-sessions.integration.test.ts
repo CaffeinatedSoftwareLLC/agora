@@ -23,6 +23,19 @@ let codex: Agent;
 let claude: Agent;
 let outsider: Agent; // a bot with channel access but no session
 
+/**
+ * Run `fn` with these bots owned by a plain member (who can't direct agents). A bot its owner made counts as the owner (owner bots,
+ * owner-bots.integration.test.ts) and has the owner's authority for its posts; these tests are about
+ * bots that don't.
+ */
+async function notCounting<T>(botIds: string[], fn: () => Promise<T>): Promise<T> {
+    const before = (await ctx.db.query('SELECT id, bot_owner_id FROM users WHERE id = ANY($1)', [botIds])).rows;
+    await ctx.db.query('UPDATE users SET bot_owner_id = $2 WHERE id = ANY($1)', [botIds, member.userId]);
+    try { return await fn(); } finally {
+        for (const r of before) await ctx.db.query('UPDATE users SET bot_owner_id = $2 WHERE id = $1', [r.id, r.bot_owner_id]);
+    }
+}
+
 async function makeBot(name: string): Promise<{ botId: string; auth: { Authorization: string } }> {
     const bot = await ctx.request.post(`/servers/${serverId}/bots`).set(owner.auth).send({ username: name });
     expect(bot.status).toBe(201);
@@ -241,12 +254,12 @@ describe('wake routing (S1)', () => {
 
     // On a box host (API key): on a machine host codex is owner-only, and outsider, the owner's
     // own bot, reaches it without can_direct (owner bots, owner-bots.integration.test.ts)
-    it('does not wake on other bots\' chatter or in unbound threads', () => onBoxHost(async () => {
+    it('does not wake on other bots\' chatter or in unbound threads', () => onBoxHost(() => notCounting([outsider.botId], async () => {
         const s1 = await startSession(codex);
         const p = await post(outsider.auth, '@codex do my bidding');
         await reply(outsider.auth, p.id, '[AGORA/v1 MODE=plan STATE=TURN]\nhi\n[YIELD to=codex]');
         expect(await inbox(s1)).toEqual([]);
-    }));
+    })));
 
     it('binds a thread on a top-level START and routes the protocol inside it', async () => {
         const sx = await startSession(codex);
@@ -732,7 +745,7 @@ describe('commands (S4)', () => {
 
     it('only the owner and directors can start; anyone with access can list', async () => {
         expect((await cmd(member.auth, { command: 'start', profile: 'codex' })).status).toBe(403);
-        expect((await cmd(outsider.auth, { command: 'start', profile: 'codex' })).status).toBe(403);
+        expect((await notCounting([outsider.botId], () => cmd(outsider.auth, { command: 'start', profile: 'codex' }))).status).toBe(403);
         await cmd(owner.auth, { command: 'start', profile: 'codex' });
         const list = await cmd(member.auth, { command: 'sessions' });
         expect(list.status).toBe(200);
@@ -816,10 +829,12 @@ describe('commands (S4)', () => {
     it('a bot with can_direct can start sessions (orchestrator)', async () => {
         await ctx.request.put(`/channels/${channelId}/bots/${claude.botId}/direct`).set(owner.auth).send({ canDirect: true });
         try {
-            // On a machine host the profile is owner-only (host mode, §10)
-            const refused = await cmd(claude.auth, { command: 'start', profile: 'codex' });
-            expect(refused.status).toBe(403);
-            expect(refused.body.error).toBe('subscription_owner_only');
+            // On a machine host the profile is owner-only (host mode, §10). The owner's own bot acts as the
+            // owner (owner bots): the session is the owner's, and says it was started by their bot
+            const started = await cmd(claude.auth, { command: 'start', profile: 'codex' });
+            expect(started.status).toBe(201);
+            expect((await ctx.db.query('SELECT started_by FROM agent_sessions WHERE id = $1', [started.body.session.id])).rows[0].started_by.trim()).toBe(owner.userId);
+            await cmd(owner.auth, { command: 'end', profile: 'codex' });
             await onBoxHost(async () => {
                 const res = await cmd(claude.auth, { command: 'start', profile: 'codex' });
                 expect(res.status).toBe(201);
@@ -829,7 +844,7 @@ describe('commands (S4)', () => {
         }
     });
     it('/start from a bot without can_direct says cannot_direct, with its name and the channel (#75)', async () => {
-        const res = await cmd(claude.auth, { command: 'start', profile: 'codex' });
+        const res = await notCounting([claude.botId], () => cmd(claude.auth, { command: 'start', profile: 'codex' }));
         expect(res.status).toBe(403);
         expect(res.body.error).toBe('cannot_direct');
         expect(res.body.message).toMatch(/^claude can't direct agents in #general; ask the server owner to grant DirectAgents/);
@@ -838,7 +853,7 @@ describe('commands (S4)', () => {
     it('a refused /start creates no session for the target agent and leaves the host nothing to claim', async () => {
         const count = async () => (await ctx.db.query(`SELECT count(*)::int AS n FROM agent_sessions WHERE bot_id = $1 AND state = 'live'`, [codex.botId])).rows[0].n;
         const before = await count();
-        const res = await cmd(claude.auth, { command: 'start', profile: 'codex' });
+        const res = await notCounting([claude.botId], () => cmd(claude.auth, { command: 'start', profile: 'codex' }));
         expect(res.status).toBe(403);
         expect(res.body.error).toBe('cannot_direct');
         expect(await count()).toBe(before);
@@ -853,7 +868,7 @@ describe('session_wake: require_direct (#75)', () => {
     it('refuses a wake from a bot that cannot direct: nothing is posted, nothing is queued', async () => {
         const session = await startSession(codex);
         const before = await ctx.db.query('SELECT count(*)::int AS n FROM messages WHERE channel_id = $1', [channelId]);
-        const res = await wake(claude.auth, '@codex review PR 62');
+        const res = await notCounting([claude.botId], () => wake(claude.auth, '@codex review PR 62'));
         expect(res.status).toBe(403);
         expect(res.body).toMatchObject({ error: 'cannot_direct', username: 'claude', channel: 'general' });
         expect(res.body.message).toMatch(/or @ the agent yourself/);

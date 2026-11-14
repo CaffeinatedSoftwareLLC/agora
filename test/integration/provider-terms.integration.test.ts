@@ -1,7 +1,7 @@
 import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase, setHostKind } from '../helpers';
 import { generateUlid } from '../../src/utils/ulid';
 import { attachTerminal } from '../../src/lib/terminal-sessions';
-import { hostRefusalNotice } from '../../src/lib/provider-terms';
+import { hostRefusalNotice, startedByNotice } from '../../src/lib/provider-terms';
 
 /**
  * Provider-terms guardrails (docs/provider-terms.md, src/lib/provider-terms.ts).
@@ -109,6 +109,8 @@ beforeAll(async () => {
 afterAll(async () => { await ctx.close(); });
 
 beforeEach(async () => {
+    // Bot-triggered notices are deduplicated for ten minutes (channel, thread, text): each test starts without earlier ones
+    await ctx.db.query(`DELETE FROM messages WHERE channel_id = $1 AND author_id IS NULL AND system_event = 'agent_session'`, [channelId]);
     await ctx.db.query('TRUNCATE agent_run_approvals, agent_tool_requests, agent_runs, agent_inbox, agent_batches, agent_session_threads, agent_sessions CASCADE');
     await setMode(alpha, 'subscription');
     await setMode(beta, 'subscription');
@@ -225,7 +227,7 @@ describe('subscription profiles: direct messages', () => {
         const since = mark();
         expect((await claim()).status).toBe(204);
         expect(await inbox(s)).toEqual([]);
-        expect(await notices(since)).toEqual([NOTICE('alpha')]);
+        expect(await notices(since)).toEqual([startedByNotice('alpha', 'ptowner', 'ptdirector')]);
     });
 });
 
@@ -639,6 +641,7 @@ describe('subscription profiles (owner_only): hand-offs from the owner\'s termin
         await ctx.db.query('TRUNCATE agent_inbox, agent_session_threads, agent_sessions CASCADE');
         const sa2 = await startSession(alpha);
         await startSession(gamma, director.userId);
+        await ctx.db.query(`DELETE FROM messages WHERE channel_id = $1 AND author_id IS NULL AND system_event = 'agent_session'`, [channelId]);
         const since2 = mark();
         await post(gamma.auth, START('gamma', 'alpha'));
         expect(await inbox(sa2)).toEqual([]);

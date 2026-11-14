@@ -9,9 +9,10 @@ import { Permissions } from '../permissions';
 import { getRedis } from '../auth/token-blacklist';
 import { parseProtocol, refuseSelfYield } from '../lib/protocol';
 import { cannotDirect, readAuthorities, stampAuthority } from '../lib/direct-agents';
+import { directingActor } from '../lib/owner-bot-authority';
 import { findClientKey, insertWithClientKey } from '../lib/client-key';
 import { handleControlMessage } from '../lib/session-commands';
-import { routeMessage } from '../lib/agent-sessions';
+import { routeMessage, wakePreflight } from '../lib/agent-sessions';
 import { markSourceEdited, markSourceRemoved, recordMessage } from '../lib/receipts';
 import { sanitizeMessageText } from '../lib/sanitize-text';
 import { notifyMentions } from '../lib/notifications';
@@ -79,8 +80,14 @@ export async function messageRoutes(app: FastifyInstance) {
 
         // A wake from someone who can't direct would post but wake no one: say so instead.
         // Checked before rate limits so a refused wake doesn't count against the bot.
-        if (requireDirect && !await stampAuthority(db, channelId, userId, !!isBot)) {
+        if (requireDirect && !await directingActor(db, { channelId, userId, isBot: !!isBot, tokenId: request.botTokenId })) {
             return reply.status(403).send(await cannotDirect(db, channelId, userId));
+        }
+        // ... and not a wake the plan-owner rule would refuse after posting (another person's session, a token that doesn't count)
+        if (requireDirect && isBot) {
+            const refusals = await wakePreflight(db, { channelId, authorId: userId, authorTokenId: request.botTokenId ?? null,
+                couldDirect: await stampAuthority(db, channelId, userId, true), content: content ?? '' });
+            if (refusals.length > 0) return reply.status(403).send({ error: 'wake_refused', message: refusals.join(' ') });
         }
 
         // Fetch channel details (needed for mention resolution, loop guard, rate limiting)

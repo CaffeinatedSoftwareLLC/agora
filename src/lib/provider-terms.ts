@@ -167,6 +167,46 @@ export async function ownerBotOf(db: any, input: { botId: string; tokenId: strin
     return row?.bot_owner_id?.trim() ?? null;
 }
 
+/**
+ * The owner-bot authority's token and switch conditions for a bot that already counts as `personId`
+ * (docs/provider-terms.md): a live PERSONAL token the owner made (or Agora made), not an agent
+ * host's, box's, model or invite token, and the bot's own switch (users.bot_acts_as_owner, migration
+ * 102) on. Needs the service role.
+ */
+export async function actsAsOwner(db: any, input: { botId: string; tokenId: string | null | undefined; personId: string }): Promise<boolean> {
+    if (!input.tokenId) return false;
+    const row = (await db.query(
+        `SELECT 1 FROM users u JOIN bot_tokens t ON t.id = $2::char(26) AND t.bot_id = u.id
+         WHERE u.id = $1 AND u.bot = true AND u.bot_acts_as_owner AND u.bot_owner_id = $3::char(26)
+           AND t.revoked_at IS NULL AND t.purpose = 'personal' AND (t.created_by IS NULL OR t.created_by = u.bot_owner_id)`,
+        [input.botId, input.tokenId, input.personId]
+    )).rows;
+    return row.length > 0;
+}
+
+/**
+ * The channel notice for a wake of the plan owner's session by one of their own bots, refused
+ * because someone else started (or last resumed) the session. `owner`: the plan owner,
+ * `starter`: who started it, when known. The fix is the plan owner's: a start by them is the
+ * only thing that makes the session theirs (the rule: a subscription agent runs only for its plan owner).
+ */
+export function startedByNotice(agent: string, owner: string, starter: string | null): string {
+    const by = starter && starter !== owner ? `${starter} started ${agent}'s session` : `${agent}'s session wasn't started by ${owner}`;
+    return `${by}, so ${owner}'s agents can't wake it (a subscription agent runs only for the person whose plan it is). `
+        + `${owner} can end it with /end ${agent} and start it again with /start ${agent}, or resume it with /resume if it is shelved.`;
+}
+
+/**
+ * An owner's own bot @mentioned a subscription agent while the server is set to "Only you"
+ * (subscription_wakes 'owner_only'): then only the owner's own message wakes it directly, and a
+ * bot only hands off. Names the setting and the one change that lets the bot wake it.
+ */
+export function ownerOnlyNotice(bot: string, agent: string, owner: string): string {
+    return `${bot} is ${owner}'s bot, but this server is set to Only you (Settings → Agents, Who can wake subscription agents), `
+        + `so only ${owner}'s own messages wake ${agent} directly; bots only hand off. `
+        + `${owner} can set it to "You and your own agents" so ${bot} can wake ${agent}, or post the message instead.`;
+}
+
 /** The channel notice for a wake the plan-owner rule refused. */
 export function planNotice(agent: string, authMode: string | null | undefined, connected = true): string {
     if (authMode !== 'siwc') return subscriptionNotice(agent);

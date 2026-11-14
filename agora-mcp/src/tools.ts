@@ -953,7 +953,7 @@ export function registerTools(
 
     // ─── Agent sessions ───
     // Starting, ending and waking other agents needs can_direct in the channel, which only
-    // the server owner grants; without it these return 403. Listing needs only access.
+    // the server owner grants, or a personal token on the owner's own bot with its switch on; without it these return 403. Listing needs only access.
 
     /**
      * Turn the server's 403 cannot_direct into an error the agent can act on (#75), so a
@@ -1010,7 +1010,7 @@ export function registerTools(
 
     server.tool(
         'session_start',
-        'Start (or resume) an agent session in a channel from a profile, so the agent host wakes that agent when it is addressed. If the agent already has a live session there, on_live decides: "ask" (default) reports it, "keep" leaves it, "shelve" shelves it and starts a new one. Needs can_direct.',
+        'Start (or resume) an agent session in a channel from a profile, so the agent host wakes that agent when it is addressed. If the agent already has a live session there, on_live decides: "ask" (default) reports it, "keep" leaves it, "shelve" shelves it and starts a new one. Needs can_direct, or a personal token on your owner\'s own bot while its "acts with your authority" switch is on (then it acts as that owner; fresh sessions, budgets and CLI commands still need the person). An agent on the owner\'s subscription starts only as the owner.',
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
             profile: z.string().describe('Profile name, e.g. "codex"'),
@@ -1029,7 +1029,7 @@ export function registerTools(
 
     server.tool(
         'session_lurk',
-        'Set or clear passive listening for an existing live session. Requires can_direct, like session_start. Lurkers reply only for important corrections and count against any limits the owner set on the session.',
+        'Set or clear passive listening for an existing live session. Requires can_direct, or a personal token on your owner\'s own bot while its "acts with your authority" switch is on (then it acts as that owner; fresh sessions, budgets and CLI commands still need the person), like session_start. Lurkers reply only for important corrections and count against any limits the owner set on the session.',
         { channel: z.string().optional(), profile: z.string(), lurk: z.enum(['quiet', 'balanced', 'vocal', 'off']) },
         async ({ channel, profile, lurk }) => {
             const ch = await resolveChannel(channel);
@@ -1041,7 +1041,7 @@ export function registerTools(
 
     server.tool(
         'session_end',
-        'End an agent\'s live session in a channel. Queued work is dropped and a run in progress is stopped; the history stays. Needs can_direct.',
+        'End an agent\'s live session in a channel. Queued work is dropped and a run in progress is stopped; the history stays. Needs can_direct, or a personal token on your owner\'s own bot while its "acts with your authority" switch is on (then it acts as that owner; fresh sessions, budgets and CLI commands still need the person).',
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
             profile: z.string().describe('Profile name, e.g. "codex"'),
@@ -1097,7 +1097,7 @@ export function registerTools(
 
     server.tool(
         'session_wake',
-        'Wake an agent that has a live session in this channel by posting a message that mentions it. The agent host starts that agent with your message. Needs can_direct in the channel: without it this fails and nothing is posted.',
+        'Wake an agent that has a live session in this channel by posting a message that mentions it. The agent host starts that agent with your message. Needs can_direct in the channel, or a personal token on your owner\'s own bot while its "acts with your authority" switch is on (then it acts as that owner; fresh sessions, budgets and CLI commands still need the person): without either this fails and nothing is posted. It is also refused, with the reason, when the agent would not run for it (a session another person started, for example).',
         {
             channel: z.string().optional().describe('Channel name or ID (uses default if omitted)'),
             profile: z.string().describe('Profile name of the agent to wake'),

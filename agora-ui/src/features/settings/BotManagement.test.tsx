@@ -279,11 +279,21 @@ describe('token badges: who each token counts as', () => {
   const row = (name: string) => screen.getByText(name).closest('[data-testid="bot-token"]') as HTMLElement;
   const badge = (name: string) => within(row(name)).getByTestId('token-badge');
 
+  it('the bot settings have a plain switch for acting with your authority, on by default', async () => {
+    await openBot(ME);
+    const box = screen.getByRole('checkbox', { name: /Acts with your authority/ });
+    expect(box).toBeChecked();
+    const update = vi.spyOn(botApi, 'update').mockResolvedValue({ id: 'x', username: 'bot-1999', avatarUrl: null, actsAsOwner: false });
+    fireEvent.click(box);
+    await waitFor(() => expect(update).toHaveBeenCalledWith(expect.anything(), expect.anything(), { actsAsOwner: false }));
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: /Acts with your authority/ })).not.toBeChecked());
+  });
+
   it('on your own bot your personal tokens count as you, agent host and box tokens only in your own runs, a model agent token never', async () => {
     await openBot(ME);
     for (const name of ['laptop', 'old terminal']) {
       expect(badge(name)).toHaveTextContent('Counts as you');
-      expect(badge(name)).toHaveAttribute('title', expect.stringContaining('wake subscription agents you started'));
+      expect(badge(name)).toHaveAttribute('title', expect.stringContaining('wake the subscription agents you started'));
     }
     expect(badge('agent host')).toHaveTextContent('Your own runs only');
     expect(badge('agent host')).toHaveAttribute('title', expect.stringContaining("An API-key agent's runs never count"));
