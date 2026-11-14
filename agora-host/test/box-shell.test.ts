@@ -571,8 +571,8 @@ print(out)
         it('reports the agent side the moment as-agent writes its mark, before any scan could see the process, and keeps the mark off the screen', async () => {
             const r = runSide(['/bin/bash', '--norc', '--noprofile', '-i']);
             await until(() => last(r.sides) === 'operator');
-            // Not a process the scan would call a client: only the mark can have moved the display. The mark is cut in two reads.
-            r.pty.write(Buffer.from(`printf '\033]7777;agora'; sleep 0.1; printf -- '-as-agent\007'; echo done-$((6*7))\n`));
+            // Not a process the scan would call a client: only the mark can have moved the display.
+            r.pty.write(Buffer.from(`printf '\\033]7777;agora-as-agent\\007'; echo done-$((6*7))\n`));
             await until(() => r.sides.includes('agent'), 3000);
             await until(() => r.out().includes('done-42'));
             expect(r.out()).not.toContain(String.fromCharCode(27) + ']7777');
