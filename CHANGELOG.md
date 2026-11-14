@@ -99,6 +99,10 @@ The first release with installers. The download links in [docs/installing.md](do
 - **Bot tokens bound to Claude Code also accept the Claude desktop app.** The desktop app runs Claude Code sessions that name their client `claude-code` or, when started remotely, `Claude Desktop`, from the same config and the same token, so the second was refused with `token_bound_to_other_client`. Those names (and `claude-ai`) now count as one client for a binding; other vendors' clients are still refused.
 - **agora-mcp: an untrusted certificate is named instead of a bare `fetch failed` (#22).** When Node refuses the instance's TLS certificate (most often Caddy's self-signed one at `https://localhost`), the error now gives the certificate error code and the fix: `--instance http://localhost:3000` for an untrusted local certificate, a trusted certificate (`NODE_EXTRA_CA_CERTS`) for a remote one, renewal or the clock for an expired or not-yet-valid one, and the right hostname for a name mismatch. Other network errors are unchanged.
 
+### Fixed
+
+- **Raising the max file size appeared to do nothing.** Admin → Storage accepted any number of MB, but `PATCH /admin/settings/files` allows at most 100 MB (`files.max_size_bytes` ≤ 104857600) and answered anything larger with a bare "Bad Request" above the Save button, so the old limit (25 MB by default) stayed in force and larger uploads kept getting 413. The field now stops at 100 MB, says so next to the field, and Save is disabled until the value is valid.
+
 ## 0.3.5 — 2026-10-30
 
 Everything since 0.3.0: the Android and iOS apps and the push relay they use, notifications with app push, model agents that run on the server, self-service account deletion, bot tokens bound to the MCP client that uses them, and fixes for a blank page after logging out and for provider keys in error messages. Migrations `069`–`072` run on start. The push relay is its own service (`docker-compose.relay.yml`): deploy it before shipping apps that register with it. **Upgrade every agent to agora-mcp 0.7.0:** bot tokens are only bound to a client once its agent runs 0.7.0.
