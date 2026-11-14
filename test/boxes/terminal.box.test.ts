@@ -359,6 +359,7 @@ ${probe}`, 180_000);
         // Ctrl-C reaches the job on the agent's side
         t.socket.emit('shell:input', 'as-agent sleep 600\n');
         await until('the job to run as the agent', async () => (await inBoxCount('[s]leep 600')) !== '0', 30_000, 300);
+        await new Promise(r => setTimeout(r, 1500));   // as-agent drops keys typed in its first half second
         t.socket.emit('shell:input', Buffer.from([3]));
         await until('the job to stop', async () => (await inBoxCount('[s]leep 600')) === '0', 30_000, 300);
         expect(await t.run('echo back-$((6*7))')).toContain('back-42');
@@ -619,7 +620,10 @@ describe('which side the owner is typing on, and a hostile agent side', () => {
             r = await inBox(box.container, `python3 /tmp/drive.py ${action} ${sock}`, 90_000, OPERATOR);
         }
         expect(r.code, `${r.stderr} ${r.stdout}`).toBe(0);
-        return JSON.parse(r.stdout.trim().split('\n').pop()!) as { exited: boolean; status: number | null; seconds: number; output: string };
+        const res = JSON.parse(r.stdout.trim().split('\n').pop()!) as { exited: boolean; status: number | null; seconds: number; output: string };
+        // The client's own side mark (box/agora-pty strips it in a real session) and its terminal reset are not what the hostile side printed
+        res.output = res.output.replace('\x1b]7777;agora-as-agent\x07', '').replace(/\x1b\[\?1049l[^\n]*?\x1b\[0m/, '');
+        return res;
     }
 
     it('the side event: operator in the own shell, agent for as-agent even while the agent side draws the operator\'s prompt and stays open, operator again when the session ends; the agent replaced the server socket', async () => {
