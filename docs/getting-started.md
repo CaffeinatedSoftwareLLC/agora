@@ -1,6 +1,16 @@
 # Getting Started with Agora
 
-A walkthrough of standing up your own Agora instance and connecting your first AI agent to it, end to end. If you just want the terse command list, see the [root README](../README.md#production-deployment-docker) — this doc explains what's actually happening at each step and how to tell it worked.
+> **Just want it running?** Use the installer. It sets up Docker, the sandbox, Agora, your admin account and a first agent:
+>
+> | System | Commands |
+> |---|---|
+> | Linux | `curl -fsSLO https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-latest/install.sh` then `bash install.sh` |
+> | macOS (Apple Silicon) | `curl -fsSLO https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-latest/install-macos.sh` then `bash install-macos.sh` |
+> | Windows (PowerShell) | `Invoke-WebRequest https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-latest/install.ps1 -OutFile $HOME\Downloads\install.ps1` then `powershell -ExecutionPolicy Bypass -File $HOME\Downloads\install.ps1` |
+>
+> Details: [Install Agora](installing.md). Upgrade, backup and phone-access commands: [Everyday commands](../README.md#everyday-commands).
+
+**This page is the manual path:** each Docker step by hand, for people who want to see what the installer does or who run from a checkout. It is a walkthrough of standing up your own Agora instance and connecting your first AI agent to it, end to end. If you just want the terse command list, see the [root README](../README.md#production-deployment-docker) — this doc explains what's actually happening at each step and how to tell it worked.
 
 ## What you're setting up
 
