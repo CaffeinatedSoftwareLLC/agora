@@ -14,8 +14,9 @@ agora-host (in the box) starts this with its stdin, stdout and a control pipe on
 Which side: the owner's terminal can be in the operator's own shell, or inside `as-agent`, a program
 that shows what the AGENT's side prints. The agent can draw anything there, even a copy of the
 operator's prompt, so what the screen shows proves nothing. This helper reports the one thing the
-agent cannot fake: whether a process running /usr/local/bin/as-agent is in the terminal's foreground
-process group (tcgetpgrp on the master, then /proc, all processes of the operator). It reports on
+agent cannot fake: whether a process running /usr/local/bin/as-agent has the terminal (it is in the
+foreground process group: tcgetpgrp on the master, then /proc; where the kernel does not answer that, any
+such process of the shell's tree counts). It reports on
 every change and once a second; when it cannot tell, it says "agent". The page draws it outside the
 terminal.
 
@@ -65,17 +66,13 @@ def fail(code, status=2):
     sys.exit(status)
 
 
-def foreground_side(master, client):
-    """'agent' when an as-agent client is in the terminal's foreground process group, or when that
-    cannot be told; 'operator' otherwise."""
-    try:
-        pgrp = os.tcgetpgrp(master)
-    except OSError:
-        return 'agent'
+def processes():
+    """pid -> (ppid, pgrp, first three arguments) of every process whose files can be read."""
+    table = {}
     try:
         names = os.listdir('/proc')
     except OSError:
-        return 'agent'
+        return None
     for name in names:
         if not name.isdigit():
             continue
@@ -83,14 +80,47 @@ def foreground_side(master, client):
             with open('/proc/%s/stat' % name, 'rb') as f:
                 stat = f.read()
             fields = stat[stat.rindex(b')') + 2:].split()
-            if int(fields[2]) != pgrp:
-                continue
             with open('/proc/%s/cmdline' % name, 'rb') as f:
                 args = f.read().split(bytes(1))
+            table[int(name)] = (int(fields[1]), int(fields[2]), args[:3])
         except (OSError, ValueError, IndexError):
-            continue        # the process went away between the two reads
+            continue        # the process went away between the reads
+    return table
+
+
+def foreground_side(master, client, shell):
+    """'agent' when an as-agent client has the terminal, or when that cannot be told; 'operator' otherwise.
+
+    Exact where the kernel answers TIOCGPGRP on the pty master (Linux): a process running the client is
+    in the terminal's foreground process group. Where it does not (gVisor answers only on the slave side),
+    the helper falls back to what it can see: any process of the shell's tree running the client counts,
+    foreground or not. That can only over-report the agent's side (a client left in the background), never
+    miss a client that is running."""
+    table = processes()
+    if table is None:
+        return 'agent'
+    want = client.encode()
+    try:
+        pgrp = os.tcgetpgrp(master)
+    except OSError:
+        pgrp = None
+    # An answer that names no process group we can see is no answer
+    if pgrp is not None and not any(group == pgrp for _ppid, group, _args in table.values()):
+        pgrp = None
+    for pid, (ppid, group, args) in table.items():
+        if pgrp is not None:
+            if group != pgrp:
+                continue
+        else:
+            # in the shell's tree: the shell itself (it may have exec'd the client) or a descendant
+            walker, hops = pid, 0
+            while walker != shell and walker in table and hops < 64:
+                walker = table[walker][0]
+                hops += 1
+            if walker != shell:
+                continue
         # python3 -I /usr/local/bin/as-agent ...  (or the script run directly)
-        if client.encode() in args[:3]:
+        if want in args:
             return 'agent'
     return 'operator'
 
@@ -198,7 +228,7 @@ def main(argv):
 
         if side_open and time.monotonic() - last_poll >= SIDE_POLL:
             last_poll = time.monotonic()
-            side = foreground_side(master, client)
+            side = foreground_side(master, client, pid)
             if side != last_side or last_poll - last_side_at >= SIDE_EVERY:
                 last_side, last_side_at = side, last_poll
                 try:

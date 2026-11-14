@@ -99,7 +99,15 @@ describe('box recovery', () => {
         await waitRunning(inst, box.id, generation + 1);
         box = await inspectBox(box.id);
         await hostCheckedInSince(t);
-        const out = (await inBox(box.container, 'stat -c "%a" ~; stat -c "%a" ~/.agora; cat ~/marker ~/old-file ~/.agora/state/recover/login.json; ls -d ~/.local/bin ~/.npm-global ~/.venvs')).stdout;
+        const look = async () => (await inBox(box.container, 'stat -c "%a" ~; stat -c "%a" ~/.agora; cat ~/marker ~/old-file ~/.agora/state/recover/login.json; ls -d ~/.local/bin ~/.npm-global ~/.venvs')).stdout;
+        let out = await look();
+        // (the start script closes the home before the host starts; give a slow engine a moment anyway)
+        for (let i = 0; i < 10 && !out.startsWith('700\n700\n'); i++) { await new Promise(r => setTimeout(r, 2000)); out = await look(); }
+        if (!out.startsWith('700\n700\n')) {
+            const why = await inBox(box.container, 'id; ls -ld ~ ~/.agora; grep -E " /home/agent " /proc/mounts; chmod 700 ~; echo "chmod rc=$?"; stat -c "%a %U" ~');
+            const logs = await docker('logs', '--tail', '30', box.container);
+            throw new Error(`the home is still open after the upgrade: ${JSON.stringify(out.slice(0, 40))}\n${why.stdout}${why.stderr}\n${logs.stderr.slice(-1500)}`);
+        }
         expect(out).toContain('700\n700\n');
         expect(out).toContain('keep-me\nold-layout\nfake-login\n');
         expect(out).toMatch(/\.local\/bin/);

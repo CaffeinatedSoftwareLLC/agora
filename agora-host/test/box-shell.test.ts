@@ -543,6 +543,31 @@ time.sleep(float(sys.argv[1]) if len(sys.argv) > 1 else 2)
             r.pty.kill();
         }, 20_000);
 
+        it('where the kernel does not answer for the pty master (gVisor), a client anywhere in the shell\'s tree counts as the agent side, and a process outside the tree does not', () => {
+            const script = `
+import importlib.machinery, os, subprocess, sys, time
+mod = importlib.machinery.SourceFileLoader('agora_pty', sys.argv[1]).load_module()
+def no_answer(_fd): raise OSError(25, 'ENOTTY')
+os.tcgetpgrp = no_answer
+client = sys.argv[2]
+out = {}
+idle = subprocess.Popen(['sleep', '20'])
+out['none'] = mod.foreground_side(None, client, idle.pid)
+stranger = subprocess.Popen(['/usr/bin/python3', '-I', client, '4'])
+time.sleep(0.5)
+# a client runs, but not in the idle shell's tree
+out['outside'] = mod.foreground_side(None, client, idle.pid)
+shell = subprocess.Popen(['/bin/sh', '-c', '/usr/bin/python3 -I ' + client + ' 4; true'])
+time.sleep(0.7)
+out['inside'] = mod.foreground_side(None, client, shell.pid)
+shell.kill(); stranger.kill(); idle.kill()
+print(out)
+`;
+            const r = spawnSync('/usr/bin/python3', ['-I', '-c', script, HELPER, join(dir, 'as-agent')], { encoding: 'utf8' });
+            expect(r.stderr).toBe('');
+            expect(/\{.*\}/.exec(r.stdout)![0]).toBe("{'none': 'operator', 'outside': 'operator', 'inside': 'agent'}");
+        });
+
         it('a background client does not make the shell the agent side, and the report repeats about once a second', async () => {
             const r = runSide(['/bin/bash', '--norc', '--noprofile', '-i']);
             await until(() => last(r.sides) === 'operator');
