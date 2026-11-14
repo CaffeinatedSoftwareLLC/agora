@@ -29,6 +29,8 @@ Open it with the board button in the channel header (Tasks). Cards are grouped b
 
 **From a GitHub issue.** A channel linked to a GitHub repository can import one of its open issues as a card, and Agora comments on the issue when the card's pull request opens, merges or closes. See [github-issues.md](github-issues.md).
 
+**Automatically.** The owner can set a rule on that repository (an issue label, or every new open issue, optionally only for some authors) so matching issues become cards by themselves, and can choose an agent to start on each. Both are off by default; cards made by the rule are marked *from rule*, and a card whose agent waits for a free slot on its host shows *Queued*. See [github-issues.md](github-issues.md#automatic-import).
+
 Deleting a card leaves its thread and session in place. End the session first if the agent should stop.
 
 ## Subtasks

@@ -38,6 +38,7 @@ import { permissionRelayRoutes } from './routes/permission-relays';
 import { channelProjectRoutes } from './routes/channel-projects';
 import { taskBoardRoutes } from './routes/task-board';
 import { githubIssueRoutes } from './routes/github-issues';
+import { githubAutomationRoutes } from './routes/github-automation';
 import { subtaskRoutes } from './routes/subtasks';
 import { receiptRoutes } from './routes/receipts';
 import { artifactRoutes } from './routes/artifacts';
@@ -418,6 +419,7 @@ export async function buildApp(opts?: {
     await app.register(channelProjectRoutes);
     await app.register(taskBoardRoutes);
     await app.register(githubIssueRoutes);
+    await app.register(githubAutomationRoutes);
     await app.register(subtaskRoutes);
     await app.register(receiptRoutes);
     await app.register(artifactRoutes);

@@ -113,11 +113,11 @@ export class Client implements HostApi {
         }
     }
     async claimGithubCommand(signal?: AbortSignal): Promise<GithubCommand | null> {
-        const data = await this.request('GET', 'github-commands/next', undefined, signal);
+        const data = await this.request('GET', 'github-commands/next?v=2', undefined, signal);
         if (data === null) return null;
         return z.object({ id: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/), claimToken: z.string().min(10),
-            action: z.enum(['issue_list', 'issue_comment']), repo: z.string().regex(REPO),
-            payload: z.object({ limit: z.number().int().min(1).max(30).optional(), number: z.number().int().min(1).optional(),
+            action: z.enum(['issue_list', 'issue_comment', 'issue_scan', 'link_info']), repo: z.string().regex(REPO),
+            payload: z.object({ limit: z.number().int().min(1).max(200).optional(), number: z.number().int().min(1).optional(),
                 body: z.string().max(1000).optional() }).passthrough(),
         }).parse(data);
     }

@@ -5,7 +5,7 @@ import { cannotDirect, isServerOwner, stampAuthority } from '../lib/direct-agent
 import { asService } from '../lib/agent-sessions';
 import { wakeAuthMode } from '../lib/provider-terms';
 import { sessionUpdate, type Notice } from '../lib/agent-runs';
-import { CARD_SELECT, CARD_STATUSES, cardJson, cardUpdate, kickoffText, notifyCardReview } from '../lib/task-cards';
+import { CARD_SELECT, CARD_STATUSES, cardJson, cardLabel, cardUpdate, kickoffText, notifyCardReview } from '../lib/task-cards';
 import { sanitizeMessageText } from '../lib/sanitize-text';
 import {
     CommandError, SESSION_SELECT, announce, botInChannel, profileByName, refuseAtLimit, requireOwnerForSubscription,
@@ -72,7 +72,7 @@ export async function startCard(db: any, channelId: string, taskId: string, user
     let threadId: string | null = card.thread_id?.trim() ?? null;
     if (!threadId) {
         threadId = generateUlid();
-        const content = `Task: ${card.title}`;
+        const content = `${card.issue_number ? '(from GitHub) ' : ''}Task: ${card.title}`;
         const systemData = { kind: 'task_card', taskId };
         await db.query(
             `INSERT INTO messages (id, channel_id, author_id, content, system_event, system_data) VALUES ($1, $2, NULL, $3, 'task_card', $4)`,
@@ -91,7 +91,7 @@ export async function startCard(db: any, channelId: string, taskId: string, user
             `UPDATE agent_sessions SET state = 'live', end_reason = NULL, limit_stop = NULL, shelved_at = NULL, last_active_at = NOW(), started_by = $2 WHERE id = $1`,
             [sessionId, userId]
         );
-        await announce(db, channelId, sessionId, `${who} resumed ${profile.name} on task "${card.title}" (session ${sessionId}).`, notices, threadId);
+        await announce(db, channelId, sessionId, `${who} resumed ${profile.name} on task "${cardLabel(card.title, !!card.issue_number)}" (session ${sessionId}).`, notices, threadId);
         action = 'resumed';
     } else {
         sessionId = generateUlid();
