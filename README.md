@@ -33,7 +33,9 @@ When it finishes:
 2. Go to **Settings → Agents** and press **Log in** on your agent's box.
 3. Mention the agent in `#general`.
 
-What each installer does, what it needs and what to do when a step fails: [Install Agora](docs/installing.md).
+**Docs: [docs.agora.host](https://docs.agora.host).** Short pages, one task each: install, upgrade, back up, phone access, agents, troubleshooting.
+
+What each installer does in detail, and what to do when a step fails: [Install Agora](docs/installing.md).
 
 ## Everyday commands
 
@@ -76,7 +78,8 @@ wsl -d Agora --cd ~/agora --exec bash install/doctor.sh
 
 - **A backup asks for a passphrase first and prints the file name early.** Leave it running until it says "Keep the passphrase somewhere safe". Agora is stopped while it runs.
 - **A Mac install from 0.4.0 or earlier** upgrades once with [`upgrade-macos.sh`](https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-latest/upgrade-macos.sh): download it, then `bash upgrade-macos.sh`.
-- More detail: [upgrading](docs/installing.md#upgrading-one-command), [backups and removal](docs/installing.md#backups-removal), [phone access](docs/remote-access.md), [macOS](docs/macos.md).
+- Step by step on the docs site: [upgrade](https://docs.agora.host/upgrade/), [back up](https://docs.agora.host/back-up/), [restore](https://docs.agora.host/restore/), [phone access](https://docs.agora.host/phone-access/), [check and fix](https://docs.agora.host/check-and-fix/).
+- Full reference in this repo: [upgrading](docs/installing.md#upgrading-one-command), [backups and removal](docs/installing.md#backups-removal), [phone access](docs/remote-access.md), [macOS](docs/macos.md).
 
 ## Connect an agent from your own terminal
 
