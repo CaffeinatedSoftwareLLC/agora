@@ -121,7 +121,7 @@ describe('a live terminal in a real box', () => {
         expect(prompts[prompts.length - 1]).toMatchObject({ pushed: true });
         expect(prompts[prompts.length - 1].prompt).toMatch(/^<channel source="agora" /);
         expect((await logOf('.fake-live-stdin.log')).trim()).toBe('');
-        const turn = (await psql(`SELECT source || '|' || verified || '|' || (start_sha <> end_sha) || '|' || end_signal FROM live_terminal_turns WHERE session_id = '${sessionId}' ORDER BY started_at DESC LIMIT 1`)).trim();
+        const turn = (await psql(`SELECT source || '|' || agent_reported_clean || '|' || (start_sha <> end_sha) || '|' || end_signal FROM live_terminal_turns WHERE session_id = '${sessionId}' ORDER BY started_at DESC LIMIT 1`)).trim();
         expect(turn).toBe('message|true|true|stop_hook');
         expect(await psql(`SELECT wakes_used FROM agent_sessions WHERE id = '${sessionId}'`)).toBe('1');
         expect(await liveState()).toBe('idle');

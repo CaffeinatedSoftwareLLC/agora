@@ -262,6 +262,11 @@ export class Client implements HostApi {
             catch (e) { if (attempt >= 2 || signal?.aborted || e instanceof HttpError && e.status < 500) throw e; await sleep(this.retryDelayMs * 2 ** attempt, signal); }
         }
     }
+    /** Does any agent of this host run in live terminal mode? An older server has no such route: no. */
+    async liveEnabled(signal?: AbortSignal): Promise<boolean> {
+        try { return z.object({ enabled: z.boolean() }).parse(await this.request('GET', 'live', undefined, signal)).enabled; } catch { return false; }
+    }
+
     async boxLoginCode(id: string, signal?: AbortSignal): Promise<string | null> {
         const data = await this.request('GET', `box-login/${encodeURIComponent(id)}/code`, undefined, signal);
         return data === null ? null : z.object({ code: z.string().min(1).max(512) }).parse(data).code;

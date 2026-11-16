@@ -314,8 +314,11 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                         for (const e of events) socket.to(`channel:${e.channelId}`).emit('AgentPresence', e);
                     };
                     broadcast(agentPresence.connect(botId, name.rows[0]?.username ?? '', socket.id, mode, channelIds));
-                    // A live terminal's owner may have the controls: a channel that connects now is told to hold
-                    if (mode === 'channel') live.botConnected(botId, socket);
+                    // A live terminal's Channel: what the server sent and agora-mcp did not acknowledge is sent again, in order
+                    if (mode === 'channel') {
+                        live.botConnected(botId);
+                        socket.on('LiveAck', (d: { sessionId?: unknown; messageId?: unknown }) => { void live.ack(botId, d?.sessionId, d?.messageId).catch(() => {}); });
+                    }
                     // The SessionEnd hook may have ended the terminal session while this socket
                     // stayed up (/clear keeps agora-mcp running): listening or working again
                     // starts a fresh one. Chained, so an Activity update lands on the new row.

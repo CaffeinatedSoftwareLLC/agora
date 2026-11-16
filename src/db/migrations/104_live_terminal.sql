@@ -45,10 +45,19 @@ CREATE TABLE live_terminal_turns (
     -- How the turn ended: stop_hook (the CLI said it finished), interrupted (the turn limit),
     -- session_ended (/end or the CLI exited), host_lost (the box stopped reporting)
     end_signal        VARCHAR(16),
-    -- True only when both commits were read and the CLI itself reported the end
-    verified          BOOLEAN NOT NULL DEFAULT FALSE,
+    -- The agent's own CLI reported a clean end (its Stop hook) and both commits were read. This is the agent's
+    -- report, NOT proof: receipts grading must not trust it as evidence that work finished.
+    agent_reported_clean BOOLEAN NOT NULL DEFAULT FALSE,
     unverified_reason VARCHAR(40)
 );
+-- Deliveries to a live session go through the inbox the server's routing already fills (mention, sole agent,
+-- thread follow-up, task thread, protocol, handoff; mayDirect, termsAllow, the plan-owner rule). The server
+-- counts the wake when it sends the push (live_wake_counted), and replays what is not acknowledged.
+ALTER TABLE agent_inbox
+    ADD COLUMN live_sent_at      TIMESTAMPTZ,
+    ADD COLUMN live_wake_counted BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE INDEX idx_agent_inbox_live ON agent_inbox(session_id, id) WHERE acked_at IS NULL AND batch_id IS NULL;
+
 CREATE INDEX idx_live_turns_session ON live_terminal_turns(session_id, started_at DESC);
 CREATE UNIQUE INDEX idx_live_turns_open ON live_terminal_turns(session_id) WHERE ended_at IS NULL;
 ALTER TABLE live_terminal_turns ENABLE ROW LEVEL SECURITY;

@@ -1,5 +1,5 @@
 import { createServer, type Server as NetServer } from 'node:net';
-import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -116,6 +116,21 @@ export function hookSettings(hookCommand = HOOK_COMMAND): object {
  * Whether the real CLI honours it is one of the things only a real login can prove.
  */
 export async function trustFolder(stateDir: string, cwd: string): Promise<void> {
+    const lock = join(stateDir, '.claude.json.agora-lock');
+    // One writer at a time among our own sessions (the CLI does not take this lock, so the window is kept short: read, merge, rename)
+    for (let tries = 0; ; tries++) {
+        try { await writeFile(lock, String(process.pid), { flag: 'wx', mode: 0o600 }); break; } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return;
+            const age = Date.now() - (await stat(lock).then(x => x.mtimeMs, () => Date.now()));
+            if (age > 10_000) await unlink(lock).catch(() => {});
+            else if (tries > 50) return;
+            else await new Promise(r => setTimeout(r, 100));
+        }
+    }
+    try { await mergeTrust(stateDir, cwd); } finally { await unlink(lock).catch(() => {}); }
+}
+
+async function mergeTrust(stateDir: string, cwd: string): Promise<void> {
     const file = join(stateDir, '.claude.json');
     let data: Record<string, any> = {};
     try { data = JSON.parse(await readFile(file, 'utf8')); } catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return; }
@@ -153,6 +168,8 @@ class LiveRun {
     hookPath = '';
     plan: LaunchPlan | null = null;
     turnOpen = false;
+    /** Hook events of this run, handled one after another */
+    hookChain: Promise<unknown> = Promise.resolve();
     /** A hook has fired since this start of the CLI (the startup watchdog's signal) */
     confirmedThisRun = false;
     constructor(public spec: LiveSpec) {}
@@ -189,8 +206,24 @@ export class LiveManager {
                 r.spec.cols = cols; r.spec.rows = rows; r.pty?.resize(cols, rows);
             }
         });
-        // Over its run-time limit: one Escape interrupts the turn. Not a chat message, not a dialog answer.
-        socket.on('live:interrupt', (m: { sessionId?: unknown }) => { const r = typeof m?.sessionId === 'string' ? this.runs.get(m.sessionId) : undefined; r?.pty?.write(Buffer.from('\x1b')); });
+        // Over its run-time limit (the server counts the steps): Escape, Escape again, Ctrl-C, then the CLI is stopped and started
+        // again with its conversation resumed. Not a chat message, not a dialog answer.
+        socket.on('live:interrupt', (m: { sessionId?: unknown; step?: unknown }) => {
+            const r = typeof m?.sessionId === 'string' ? this.runs.get(m.sessionId) : undefined;
+            if (!r?.pty) return;
+            const step = Number(m.step);
+            if (step === 1 || step === 2) r.pty.write(Buffer.from('\x1b'));
+            else if (step === 3) r.pty.write(Buffer.from('\x03'));
+            else if (step === 4) { r.confirmed = true; r.pty.kill(); }
+        });
+        // A viewer joined: the CLI is asked to draw its screen again (a size change makes it redraw)
+        socket.on('live:redraw', (m: { sessionId?: unknown }) => {
+            const r = typeof m?.sessionId === 'string' ? this.runs.get(m.sessionId) : undefined;
+            if (!r?.pty) return;
+            const pty = r.pty;
+            pty.resize(r.spec.cols + 1, r.spec.rows);
+            setTimeout(() => { if (r.pty === pty) pty.resize(r.spec.cols, r.spec.rows); }, 80).unref?.();
+        });
         socket.on('live:pace', (m: { sessionId?: unknown; ms?: unknown }) => {
             const r = typeof m?.sessionId === 'string' ? this.runs.get(m.sessionId) : undefined;
             const ms = Math.min(Math.max(Number(m?.ms) || 0, 0), 2000);
@@ -280,9 +313,12 @@ export class LiveManager {
         // The MCP server in channel mode: pushes arrive as Channel events. The subscription default (--auth subscription)
         // lets only the owner instruct the session; an API-key profile also lets directors.
         const server = { command: config.mcp.executable, args: [config.mcp.entrypoint, '--channel-mode', '--auth', local.auth === 'api_key' ? 'api_key' : 'subscription'] };
-        await writeFile(mcpFile, JSON.stringify({ mcpServers: { agora: server } }), { mode: 0o600 });
+        // (the session id is not secret: it pins agora-mcp to this session's deliveries)
+        await writeFile(mcpFile, JSON.stringify({ mcpServers: { agora: { ...server, env: { AGORA_LIVE_SESSION: r.spec.sessionId } } } }), { mode: 0o600 });
         await writeFile(settingsFile, JSON.stringify(hookSettings(this.o.hookCommand)), { mode: 0o600 });
         const env: NodeJS.ProcessEnv = { ...childEnv(local), AGORA_INSTANCE: config.instance, AGORA_BOT_TOKEN: token, AGORA_DEFAULT_CHANNEL: r.spec.channelId,
+            // agora-mcp in this CLI pushes only what the server delivers to THIS session (agora-mcp/src/channel.ts)
+            AGORA_LIVE_SESSION: r.spec.sessionId,
             AGORA_LIVE_HOOK_SOCK: r.hookPath, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
         await repoFreePath(env, [ws.cwd, local.workdir]);
         const box = inBox() ? BOX_ADAPTERS.claude : null;
@@ -377,6 +413,13 @@ export class LiveManager {
 
     /** One hook event from the CLI. The CLI is the agent's own program: this is its report, not proof. */
     private async onHook(r: LiveRun, event: unknown, payload: any): Promise<void> {
+        // One hook event at a time, in the order they arrived: a fast Stop must not send its end before its start
+        const run = r.hookChain.then(() => this.handleHook(r, event, payload), () => this.handleHook(r, event, payload));
+        r.hookChain = run.catch(() => {});
+        return run;
+    }
+
+    private async handleHook(r: LiveRun, event: unknown, payload: any): Promise<void> {
         if (!HOOK_EVENTS.includes(event as HookEvent)) return;
         const id = r.spec.sessionId;
         switch (event as HookEvent) {
@@ -445,6 +488,8 @@ export interface LiveLoopOptions {
     signal: AbortSignal;
     log(code: string): void;
     connect?: (url: string, auth: Record<string, unknown>) => Socket;
+    /** Does any agent of this host run in live terminal mode? Without it the socket is opened only for such a host. */
+    enabled?: (signal: AbortSignal) => Promise<boolean>;
     manager?: LiveManager;
     retryMinMs?: number;
     retryMaxMs?: number;
@@ -464,6 +509,11 @@ export async function liveLoop(o: LiveLoopOptions): Promise<void> {
     let delay = o.retryMinMs ?? 5000;
     let lastCode = '';
     while (!o.signal.aborted) {
+        // No live terminal agent, no socket: asked again every half minute (a box that never uses it never opens one)
+        if (o.enabled && !(await o.enabled(o.signal).catch(() => false))) {
+            await new Promise<void>(r => { const t = setTimeout(r, o.retryMinMs ?? 30_000); o.signal.addEventListener('abort', () => { clearTimeout(t); r(); }, { once: true }); });
+            continue;
+        }
         const socket = connect(origin, { type: 'live', token: o.token, liveProtocol: LIVE_PROTOCOL });
         const outcome = await new Promise<'lost' | 'refused'>(resolve => {
             let connected = false;

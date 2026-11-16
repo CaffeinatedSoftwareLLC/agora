@@ -15,6 +15,8 @@ export interface ChannelOptions {
     permissionRelay: boolean;
     /** Open a socket in plain MCP mode too, for the "connected / listening" state in the UI. */
     presence: boolean;
+    /** AGORA_LIVE_SESSION: the live-terminal session this server belongs to (agora-host sets it for the CLI it runs). */
+    liveSession?: string;
 }
 
 export function parseChannelOptions(args: string[], env: Record<string, string | undefined>): ChannelOptions {
@@ -28,6 +30,7 @@ export function parseChannelOptions(args: string[], env: Record<string, string |
         auth: raw ?? 'subscription',
         permissionRelay: !args.includes('--no-permission-relay'),
         presence: !args.includes('--no-presence') && env.AGORA_PRESENCE !== 'off',
+        ...(/^[0-9A-HJKMNP-TV-Z]{26}$/.test(env.AGORA_LIVE_SESSION ?? '') ? { liveSession: env.AGORA_LIVE_SESSION } : {}),
     };
 }
 
@@ -71,6 +74,7 @@ export function startChannel(
         api,
         auth: options.auth,
         defaultChannel: options.defaultChannel,
+        liveSession: options.liveSession,
         // Custom Claude Code methods; the SDK passes unknown notification methods through
         notify: (n: Notification) => server.notification(n as any),
         log,

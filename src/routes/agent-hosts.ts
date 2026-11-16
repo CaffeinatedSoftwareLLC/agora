@@ -428,7 +428,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
                 }
                 // A shelved session picks up the new mode when it is resumed
                 if (b.sessionMode !== undefined) {
-                    await db.query(`UPDATE agent_sessions SET live_mode = $2 WHERE profile_id = $1 AND state <> 'ended' AND kind = 'hosted'`, [profileId, b.sessionMode === 'live']);
+                    await db.query(`UPDATE agent_sessions SET live_mode = $2 WHERE profile_id = $1 AND state <> 'ended' AND kind = 'hosted' AND thread_id IS NULL`, [profileId, b.sessionMode === 'live']);
                 }
                 if (incompatible) {
                     await db.query(`UPDATE agent_sessions SET native_session_id = NULL WHERE profile_id = $1`, [profileId]);
@@ -605,6 +605,13 @@ export async function agentHostRoutes(app: FastifyInstance) {
         return reply.send({ updated, unknown });
     });
 
+    // GET /agent-hosts/@me/live → { enabled }: does any agent of this host run in live terminal mode? A box's host opens
+    // its live socket only when it does (docs/planning/live-terminals.md); it asks again now and then while it does not.
+    app.get('/agent-hosts/@me/live', async (request, reply) => {
+        const host = request.agentHost!;
+        const row = await request.dbClient!.query(`SELECT 1 FROM agent_profiles WHERE host_id = $1 AND session_mode = 'live' LIMIT 1`, [host.id]);
+        return reply.send({ enabled: row.rows.length > 0 });
+    });
     app.post('/agent-hosts/@me/workspaces/reconcile', {
         schema: { body: { type: 'object', required: ['sessionIds'], properties: {
             sessionIds: { type: 'array', maxItems: 100, items: ID },

@@ -128,6 +128,9 @@ export function LiveTerminalPage() {
     const forward = (payload: string | Uint8Array) => {
       if (!typingRef.current || !socket.connected) return;
       if (Date.now() - gestureAt.current > GESTURE_WINDOW_MS) return;
+      // Mouse and focus reports are modes the agent's screen can switch on: they are not passed on, only keys and pastes
+      // eslint-disable-next-line no-control-regex
+      if (typeof payload === 'string' && /^\[(?:M|<[\d;]+[Mm]|[IO]$)/.test(payload)) return;
       socket.emit('live:input', payload);
     };
     term.onData(d => { for (const piece of inputChunks(d)) forward(piece); });
@@ -179,6 +182,7 @@ export function LiveTerminalPage() {
       {live && (
         <>
           {liveNoteText(note) && <p className="border-b border-warn/40 bg-warn/10 px-4 py-2 text-xs text-warn" role="status" data-testid="live-note">{liveNoteText(note)}</p>}
+          {typing && <p className="border-b border-danger/40 bg-danger/10 px-4 py-1 text-xs font-semibold text-danger" role="status" data-testid="live-typing-warning">The agent sees everything typed here. Never type a password, token or login code.</p>}
           {youHaveControls && <p className="border-b border-border bg-primary/10 px-4 py-2 text-xs" role="status" data-testid="live-controls">You have the controls. Chat messages to {name} are held while you type and delivered when you stop for a few seconds.</p>}
           {!youHaveControls && controls.held && controls.reason === 'wake_limit' && <p className="border-b border-warn/40 bg-warn/10 px-4 py-2 text-xs text-warn" role="status" data-testid="live-limit">{name} has reached its wake limit: chat messages to it are held until you lift the limit in Settings → Agents.</p>}
           {role === 'watcher' && <p className="border-b border-border bg-surface px-4 py-2 text-xs text-text-muted" data-testid="live-readonly">You are watching. Only the server owner can type here.</p>}

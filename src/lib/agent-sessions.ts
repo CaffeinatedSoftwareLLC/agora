@@ -96,6 +96,8 @@ interface LiveSession {
      */
     tokenMintedBy: string | null;
     names: string[];
+    /** A live-terminal session: its pushes are sent by the live hub from the inbox rows routing writes. */
+    live?: boolean;
     lurkMode: string | null;
     profileName: string;
     /** Runs on someone's personal plan ('subscription' or 'siwc'): plan-owner wakes only. */
@@ -170,7 +172,7 @@ export async function asService<T>(client: any, fn: () => Promise<T>): Promise<T
  */
 async function liveSessions(db: any, channelId: string, threadId: string | null = null): Promise<LiveSession[]> {
     const rows = await db.query(
-        `SELECT s.id, s.bot_id, s.lurk_mode, s.started_by, u.username, p.name AS profile_name, ${WAKE_AUTH_SQL} AS auth_mode,
+        `SELECT s.id, s.bot_id, s.lurk_mode, s.started_by, s.live_mode, u.username, p.name AS profile_name, ${WAKE_AUTH_SQL} AS auth_mode,
                 ${PLAN_OWNER_SQL} AS plan_owner_id,
                 (s.started_by IS NOT NULL AND s.started_by = ${PLAN_OWNER_SQL}) AS started_by_owner
          FROM agent_sessions s
@@ -178,14 +180,13 @@ async function liveSessions(db: any, channelId: string, threadId: string | null 
          JOIN agent_profiles p ON p.id = s.profile_id
          JOIN servers srv ON srv.id = s.server_id
          WHERE s.channel_id = $1 AND s.state = 'live' AND s.kind = 'hosted' AND s.thread_id IS NOT DISTINCT FROM $2
-           -- A live-terminal session hears messages through its Channel, never through the inbox (migration 104)
-           AND NOT s.live_mode
          ORDER BY s.id`,
         [channelId, threadId]
     );
     return rows.rows.map((r: any) => ({
         id: r.id.trim(),
         kind: 'hosted' as const,
+        live: !!r.live_mode,
         botId: r.bot_id.trim(),
         botOwnerId: null,
         tokenId: null,
@@ -393,9 +394,12 @@ interface Built {
 async function buildContext(db: any, msg: RoutedMessage): Promise<Built> {
     const authorId = msg.authorId.trim();
     // Single responder: an agent connected from a terminal answers there, not through its hosted session
-    const terminals = await terminalSessions(db, msg.channelId);
-    const terminalBots = new Set<string>(terminals.map(s => s.botId));
     const all = await liveSessions(db, msg.channelId);
+    // The CLI of a live-terminal session (migration 104) is that session's own, not a user's terminal competing
+    // with it: the session takes part in routing like any hosted one, and the server tells its Channel what to push
+    const liveBots = new Set<string>(all.filter(s => s.live).map(s => s.botId));
+    const terminals = (await terminalSessions(db, msg.channelId)).filter(t => !liveBots.has(t.botId));
+    const terminalBots = new Set<string>(terminals.map(s => s.botId));
     const standby = all.filter(s => terminalBots.has(s.botId));
     const sessions = all.filter(s => !terminalBots.has(s.botId));
     // An agent writing from its terminal is that terminal session (its hosted one is on

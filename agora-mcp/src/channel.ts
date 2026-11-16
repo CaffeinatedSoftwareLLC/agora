@@ -135,8 +135,14 @@ const MAX_PREVIEW = 16000;
 const SEEN_LIMIT = 2000;
 /** Messages fetched per channel to catch up after a reconnect. */
 const CATCH_UP_LIMIT = 50;
-/** Messages kept while pushes are held; the oldest give way (they stay readable with chat_read). */
-const HELD_LIMIT = 50;
+/** A ULID, as every Agora id is. */
+const ID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+
+/** A delivery the server marked for one live-terminal session (src/lib/boxes/live-hub.ts dispatch). */
+export interface LiveDelivery {
+    sessionId?: string; channelId?: string; channelName?: string; authority?: string;
+    message?: { id?: string; content?: string; channelId?: string; authorId?: string | null; authorUsername?: string; authorBot?: boolean; threadId?: string | null; createdAt?: string };
+}
 
 export class AgoraChannel {
     private selfId = '';
@@ -153,6 +159,11 @@ export class AgoraChannel {
         notify: (n: Notification) => Promise<void>;
         auth: AuthMode;
         defaultChannel?: string;
+        /**
+         * Live terminal mode (AGORA_LIVE_SESSION): this MCP server belongs to one live session. The server decides what reaches it
+         * (its normal routing); this pushes only the deliveries it marks for that session, and ignores every chat event.
+         */
+        liveSession?: string;
         log?: (line: string) => void;
     }) {}
 
@@ -162,29 +173,33 @@ export class AgoraChannel {
         socket.on('Message', (m: ChannelMessage) => { void this.onMessage(m).catch(e => this.log(`message failed: ${e}`)); });
         socket.on('PermissionRelayDecision', (d: { relayId?: string; behavior?: string }) => { void this.onDecision(d).catch(e => this.log(`decision failed: ${e}`)); });
         socket.on('connect_error', (err: Error) => this.log(`socket: ${err?.message ?? err}`));
-        // Live terminal (docs/planning/live-terminals.md): while the owner has the keyboard in this agent's
-        // terminal, Agora asks for pushes to wait. A lost connection releases them (Agora cannot say any more).
-        socket.on('ChannelHold', (d: { held?: unknown }) => { void this.setHeld(d?.held === true).catch(e => this.log(`hold failed: ${e}`)); });
-        socket.on('disconnect', () => { void this.setHeld(false).catch(e => this.log(`hold failed: ${e}`)); });
+        // Live terminal mode (docs/planning/live-terminals.md): the server routes, this only carries. It pushes exactly what the
+        // server marks for THIS session and nothing else, and says when it has pushed it.
+        socket.on('LiveDeliver', (d: LiveDelivery) => {
+            void this.onLiveDeliver(d, ack => socket.emit('LiveAck', ack)).catch(e => this.log(`live delivery failed: ${e}`));
+        });
     }
 
-    /** Messages that passed the gate while pushes were held, oldest first (bounded). */
-    private heldQueue: Array<{ m: ChannelMessage; authority: 'owner' | 'director' }> = [];
-    private held = false;
-    get isHeld(): boolean { return this.held; }
-    get heldCount(): number { return this.heldQueue.length; }
-
-    async setHeld(held: boolean): Promise<void> {
-        if (held === this.held) return;
-        this.held = held;
-        if (held) return;
-        const queued = this.heldQueue.splice(0);
-        for (const { m, authority } of queued) await this.push(m, authority);
-    }
-
-    private async push(m: ChannelMessage, authority: 'owner' | 'director'): Promise<void> {
-        this.lastChannelId = m.channelId.trim();
-        await this.deps.notify({ method: CHANNEL_NOTIFICATION, params: formatChannelEvent(m, this.channelNames.get(m.channelId.trim()), authority) });
+    /**
+     * One server-marked delivery. Ignored unless it names this session (the bot's socket also hears what is for the bot's other
+     * sessions) and is well formed. The push is acknowledged only after it went out; a message pushed once in this process is not
+     * pushed again (the server sends it again if the acknowledgement was lost).
+     */
+    async onLiveDeliver(d: LiveDelivery, ack: (a: { sessionId: string; messageId: string }) => void): Promise<boolean> {
+        const session = this.deps.liveSession;
+        if (!session || d?.sessionId !== session || typeof d.channelId !== 'string' || !ID.test(d.channelId)) return false;
+        const m = d.message;
+        if (!m || typeof m.id !== 'string' || !ID.test(m.id) || typeof m.content !== 'string' || !m.content.trim() || m.channelId?.trim() !== d.channelId.trim()) return false;
+        if (d.authority !== 'owner' && d.authority !== 'director') return false;
+        const id = m.id.trim();
+        if (!this.seen.has(id)) {
+            this.channelNames.set(d.channelId.trim(), typeof d.channelName === 'string' ? d.channelName : d.channelId);
+            this.lastChannelId = d.channelId.trim();
+            await this.deps.notify({ method: CHANNEL_NOTIFICATION, params: formatChannelEvent({ ...m, authorAuthority: d.authority } as unknown as ChannelMessage, this.channelNames.get(d.channelId.trim()), d.authority) });
+            this.remember(id);
+        }
+        ack({ sessionId: session, messageId: id });
+        return true;
     }
 
     private log(line: string) { this.deps.log?.(`[agora channel] ${line}`); }
@@ -196,7 +211,8 @@ export class AgoraChannel {
         const channels = (data.channels ?? me.channels.map(c => c.id)).map(id => id.trim());
         const reconnect = this.ready;
         this.ready = true;
-        for (const channelId of channels) {
+        // (A live session catches nothing up from chat: the server replays what it routed and was not acknowledged)
+        for (const channelId of this.deps.liveSession ? [] : channels) {
             const recent = await this.deps.api.getMessages(channelId, { limit: CATCH_UP_LIMIT });
             const last = this.lastSeen.get(channelId);
             if (!reconnect || !last) {
@@ -213,6 +229,8 @@ export class AgoraChannel {
     }
 
     async onMessage(m: ChannelMessage): Promise<boolean> {
+        // A live session hears only what the server delivers to it (onLiveDeliver), never chat events
+        if (this.deps.liveSession) return false;
         if (!this.selfId) return false;
         const id = m.id.trim();
         const channelId = m.channelId.trim();
@@ -221,13 +239,8 @@ export class AgoraChannel {
         if (!m.threadId && (this.lastSeen.get(channelId) ?? '') < id) this.lastSeen.set(channelId, id);
         const gate = gateMessage(m, { selfId: this.selfId, auth: this.deps.auth });
         if (!gate.deliver) return false;
-        if (this.held) {
-            // Held, not dropped: delivered in order when the owner leaves the keyboard
-            if (this.heldQueue.length >= HELD_LIMIT) this.heldQueue.shift();
-            this.heldQueue.push({ m, authority: gate.authority });
-            return false;
-        }
-        await this.push(m, gate.authority);
+        this.lastChannelId = channelId;
+        await this.deps.notify({ method: CHANNEL_NOTIFICATION, params: formatChannelEvent(m, this.channelNames.get(channelId), gate.authority) });
         return true;
     }
 

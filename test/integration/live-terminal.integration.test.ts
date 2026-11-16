@@ -4,7 +4,8 @@ import supertest from 'supertest';
 import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } from '../helpers';
 import { signEdge } from '../../src/lib/boxes/contract';
 import { rotateBoxTokens } from '../../src/lib/boxes/tokens';
-import { liveHub, Ring, RING_BYTES } from '../../src/lib/boxes/live-hub';
+import { LiveHub, liveHub, Ring, RING_BYTES, MAX_TURNS_PER_SESSION } from '../../src/lib/boxes/live-hub';
+import { generateUlid as ulid } from '../../src/utils/ulid';
 import { agentPresence } from '../../src/lib/agent-presence';
 
 /**
@@ -20,6 +21,12 @@ process.env.AGORA_EDGE_SECRET = EDGE_SECRET;
 process.env.AGORA_LIVE_CONTROL_IDLE_MS = '400';
 process.env.AGORA_LIVE_CHANNEL_GRACE_MS = '0';
 process.env.AGORA_LIVE_ACCESS_RECHECK_MS = '0';
+process.env.AGORA_LIVE_DISPATCH_MS = '100';
+process.env.AGORA_LIVE_SYNC_MS = '300';
+process.env.AGORA_LIVE_REDELIVER_MS = '700';
+process.env.AGORA_LIVE_ESCALATE_MS = '400';
+process.env.AGORA_LIVE_UNDELIVERED_MS = '600000';
+process.env.AGORA_LIVE_PACE_IGNORE_MS = '600';
 const PASSWORD = 'TestPass123!';
 const SHA1 = 'a'.repeat(40), SHA2 = 'b'.repeat(40);
 
@@ -36,7 +43,7 @@ const sockets: Socket[] = [];
 
 interface Session { cookie: string; csrf: string }
 interface Box { id: string; name: string; generation: number; hostToken: string; relayToken: string; botToken: string; profileId: string }
-interface FakeHost { socket: Socket; input: Buffer[]; resized: any[]; desired: any[]; interrupts: number; paced: number }
+interface FakeHost { socket: Socket; input: Buffer[]; resized: any[]; desired: any[]; interrupts: number; paced: number; redraws: number }
 
 async function cookieLogin(login: string): Promise<Session> {
     const res = await api.post('/auth/login').set('X-Agora-Session', 'cookie').send({ login, password: PASSWORD });
@@ -73,7 +80,7 @@ const until = async (fn: () => boolean | Promise<boolean>, ms = 4000) => { const
 
 /** The box's agora-host: connects with its host token through its own edge and records what Agora tells it. */
 async function connectHost(box: Box, opts: { protocol?: number; token?: string; headers?: Record<string, string> } = {}): Promise<FakeHost> {
-    const host: FakeHost = { socket: null as any, input: [], resized: [], desired: [], interrupts: 0, paced: 0 };
+    const host: FakeHost = { socket: null as any, input: [], resized: [], desired: [], interrupts: 0, paced: 0, redraws: 0 };
     const socket = io(base, {
         transports: ['websocket'], autoConnect: false, reconnection: false,
         extraHeaders: opts.headers ?? edgeFor(box),
@@ -86,6 +93,7 @@ async function connectHost(box: Box, opts: { protocol?: number; token?: string; 
     socket.on('live:resize', m => host.resized.push(m));
     socket.on('live:interrupt', () => host.interrupts++);
     socket.on('live:pace', () => host.paced++);
+    socket.on('live:redraw', () => host.redraws++);
     await connected(socket);
     return host;
 }
@@ -112,13 +120,30 @@ async function watch(session: Session, sessionId: string) {
     return { s, hello, chunks, events, text: () => Buffer.concat(chunks).toString() };
 }
 
+/** The bot's Claude Code Channel connection (agora-mcp --channel-mode): what the server delivers to it, and the acknowledgements it sends. */
+async function channelSocket() {
+    const s = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(box), auth: { type: 'bot', token: box.botToken, mode: 'channel', client: 'claude-code' } });
+    sockets.push(s);
+    const deliveries: any[] = [];
+    s.on('LiveDeliver', d => deliveries.push(d));
+    await connected(s);
+    return { s, deliveries };
+}
+async function postAs(who: { auth: object }, content: string): Promise<string> {
+    const r = await api.post(`/channels/${channelId}/messages`).set(who.auth).send({ content });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    return r.body.id.trim();
+}
 const rows = async (sql: string, params: unknown[] = []) => (await ctx.db.query(sql, params)).rows;
+const wakes = async () => Number((await rows(`SELECT wakes_used FROM agent_sessions WHERE id = $1`, [sessionId]))[0].wakes_used);
+const botOf = () => botIdOfBox;
 const notices = (like = '%') => rows(`SELECT content FROM messages WHERE channel_id = $1 AND system_event = 'agent_session' AND content LIKE $2 ORDER BY id`, [channelId, like]);
 
 let ownerSession: Session, directorSession: Session, memberSession: Session;
 let box: Box;
 let host: FakeHost;
 let sessionId: string;
+let botIdOfBox = '';
 
 const startLive = async () => {
     const started = await api.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'start', profile: box.name, fresh: true });
@@ -151,9 +176,11 @@ beforeEach(async () => {
     box = await makeBox('alpha');
     const mode = await api.patch(`/servers/${serverId}/agent-profiles/${box.profileId}`).set(owner.auth).send({ sessionMode: 'live' });
     expect(mode.status, JSON.stringify(mode.body)).toBe(200);
-    sessionId = await startLive();
+    // The box's host has opened its live socket (a live session cannot be started before it has)
     host = await connectHost(box);
-    await until(() => host.desired.length > 0);
+    sessionId = await startLive();
+    botIdOfBox = (await rows(`SELECT bot_id FROM agent_sessions WHERE id = $1`, [sessionId]))[0].bot_id.trim();
+    await until(() => host.desired.some(d => d.sessions.length > 0));
 });
 afterEach(async () => {
     for (const s of sockets.splice(0)) s.disconnect();
@@ -196,16 +223,17 @@ describe('the mode switch', () => {
         expect(bad.status).toBe(400);
     });
 
-    test('a live-mode session is a hosted session that takes no runs and hears messages only through its Channel', async () => {
+    test('a live-mode session is a hosted session that takes part in routing but is never claimed as a per-wake run', async () => {
         const row = (await rows(`SELECT live_mode, native_session_id FROM agent_sessions WHERE id = $1`, [sessionId]))[0];
         expect(row.live_mode).toBe(true);
         expect(row.native_session_id).toMatch(/^[0-9a-f-]{36}$/);
         const post = await api.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: '@alpha please look at the build' });
         expect(post.status).toBe(201);
-        // No inbox row, no run: the host's claim finds nothing
-        expect(await rows(`SELECT 1 FROM agent_inbox WHERE session_id = $1 AND reason <> 'command'`, [sessionId])).toHaveLength(0);
+        // Routing wrote its inbox row, as for any hosted session; the host's claim finds nothing to run
+        expect(await rows(`SELECT 1 FROM agent_inbox WHERE session_id = $1 AND reason = 'direct'`, [sessionId])).toHaveLength(1);
         const hostAuth = { Authorization: `AgentHost ${box.hostToken}`, ...edgeFor(box) };
         expect((await api.get('/agent-hosts/@me/runs/next?wait=0').set(hostAuth)).status).toBe(204);
+        expect(await rows(`SELECT 1 FROM agent_runs WHERE session_id = $1`, [sessionId])).toHaveLength(0);
     });
 
     test('a profile in per-wake mode starts sessions exactly as before', async () => {
@@ -234,8 +262,8 @@ describe('the mode switch', () => {
 describe('the host connection', () => {
     test('gets exactly this box\'s live sessions, with the conversation id to resume', async () => {
         const row = (await rows(`SELECT native_session_id FROM agent_sessions WHERE id = $1`, [sessionId]))[0];
-        expect(host.desired[0].sessions).toEqual([expect.objectContaining({ sessionId, channelId, botId: expect.any(String), conversation: row.native_session_id, profile: 'alpha', cols: 120, rows: 32 })]);
-        expect(host.desired[0].sessions[0]).not.toHaveProperty('token');
+        expect(host.desired.find(d => d.sessions.length)!.sessions).toEqual([expect.objectContaining({ sessionId, channelId, botId: expect.any(String), conversation: row.native_session_id, profile: 'alpha', cols: 120, rows: 32 })]);
+        expect(host.desired.find(d => d.sessions.length)!.sessions[0]).not.toHaveProperty('token');
         expect(JSON.stringify(host.desired)).not.toContain('bot_');
     });
 
@@ -260,9 +288,9 @@ describe('the host connection', () => {
     test('ignores events about a session that is not this box\'s', async () => {
         const other = await makeBox('gamma');
         await api.patch(`/servers/${serverId}/agent-profiles/${other.profileId}`).set(owner.auth).send({ sessionMode: 'live' });
-        const otherSession = (await api.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'start', profile: 'gamma', fresh: true })).body.session.id;
         const otherHost = await connectHost(other);
-        await until(() => otherHost.desired.length > 0);
+        const otherSession = (await api.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'start', profile: 'gamma', fresh: true })).body.session.id;
+        await until(() => otherHost.desired.some(d => d.sessions.length > 0));
         const w = await watch(ownerSession, otherSession);
         // alpha's host speaks for gamma's session: ignored
         host.socket.emit('live:output', { sessionId: otherSession, data: Buffer.from('forged') });
@@ -398,53 +426,189 @@ describe('who may type', () => {
 });
 
 describe('the owner has the controls', () => {
-    const botSocket = async () => {
-        const s = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(box), auth: { type: 'bot', token: box.botToken, mode: 'channel', client: 'claude-code' } });
-        sockets.push(s);
-        const holds: any[] = [];
-        s.on('ChannelHold', h => holds.push(h));
-        await connected(s);
-        return { s, holds };
-    };
-
-    test('typing holds deliveries to the agent, going idle releases them, and viewers are told', async () => {
-        const bot = await botSocket();
+    test('typing holds deliveries to the agent, going idle releases them in order, and viewers are told', async () => {
+        const ch = await channelSocket();
         const o = await watch(ownerSession, sessionId);
         const d = await watch(directorSession, sessionId);
         o.s.emit('live:take', { ack: true });
         await wait(o.s, 'live:taken');
         o.s.emit('live:input', 'a');
-        await until(() => bot.holds.some(h => h.held === true));
-        expect(bot.holds.find(h => h.held)).toMatchObject({ held: true, sessionId, reason: 'controls' });
         await until(() => d.events.some(e => e.event === 'live:controls' && e.data.held === true));
-        expect(d.events.find(e => e.event === 'live:controls')!.data).toMatchObject({ by: 'liveowner', held: true });
-        // 400 ms of idle (AGORA_LIVE_CONTROL_IDLE_MS) and the hold lifts
-        await until(() => bot.holds.some(h => h.held === false), 5000);
+        expect(d.events.find(e => e.event === 'live:controls')!.data).toMatchObject({ by: 'liveowner', held: true, reason: 'controls' });
+        const first = await postAs(owner, '@alpha first while typing');
+        const second = await postAs(owner, '@alpha second while typing');
+        // Still typing: the keyboard stays active
+        for (let i = 0; i < 5; i++) { o.s.emit('live:input', 'b'); await settle(150); }
+        // Held on the server: nothing was sent, and no wake counted
+        expect(ch.deliveries).toEqual([]);
+        expect(await wakes()).toBe(0);
+        // 400 ms of idle (AGORA_LIVE_CONTROL_IDLE_MS) and they go, in order
+        await until(() => ch.deliveries.length === 2, 6000);
+        expect(ch.deliveries.map(x => x.message.id.trim())).toEqual([first, second]);
         await until(() => d.events.some(e => e.event === 'live:controls' && e.data.held === false));
+        expect(await wakes()).toBe(2);
     });
 
     test('leaving the keyboard releases at once', async () => {
-        const bot = await botSocket();
+        const ch = await channelSocket();
         const o = await watch(ownerSession, sessionId);
         o.s.emit('live:take', { ack: true });
         await wait(o.s, 'live:taken');
         o.s.emit('live:input', 'a');
-        await until(() => bot.holds.some(h => h.held));
+        await until(() => liveHub()!.isHeld(botOf()));
+        await postAs(owner, '@alpha wait for me');
+        await settle(300);
+        expect(ch.deliveries).toEqual([]);
         o.s.disconnect();
-        await until(() => bot.holds.some(h => h.held === false), 1000);
+        await until(() => ch.deliveries.length === 1, 2500);
+    });
+});
+
+describe('delivery: the server routes, the Channel carries', () => {
+    test('a mention reaches the live session through the normal inbox, is counted as one wake when sent, and is pinned to the session', async () => {
+        const ch = await channelSocket();
+        const id = await postAs(owner, '@alpha please look at the build');
+        await until(() => ch.deliveries.length === 1);
+        const d = ch.deliveries[0];
+        expect(d).toMatchObject({ sessionId, channelId, authority: 'owner' });
+        expect(d.message).toMatchObject({ id, content: '@alpha please look at the build', authorUsername: 'liveowner' });
+        expect(await wakes()).toBe(1);
+        // Acknowledged: finished
+        ch.s.emit('LiveAck', { sessionId, messageId: id });
+        await until(async () => (await rows(`SELECT acked_at FROM agent_inbox WHERE message_id = $1`, [id]))[0].acked_at !== null);
+        await settle(400);
+        expect(ch.deliveries).toHaveLength(1);
+        expect(await wakes()).toBe(1);
+        // Only the bot's own session may acknowledge, and only what was sent
+        expect(await liveHub()!.ack(botOf(), sessionId, id)).toBe(false);
+        expect(await liveHub()!.ack('Z'.repeat(26), sessionId, id)).toBe(false);
     });
 
-    test('a channel that connects while the owner has the controls is told to hold', async () => {
-        const o = await watch(ownerSession, sessionId);
-        o.s.emit('live:take', { ack: true });
-        await wait(o.s, 'live:taken');
-        o.s.emit('live:input', 'a');
-        await until(() => liveHub()!.isHeld(sessionBot()));
-        const bot = await botSocket();
-        await until(() => bot.holds.some(h => h.held === true));
+    test('a message in a channel the agent is not in, or addressed to another agent, never reaches the CLI', async () => {
+        const ch = await channelSocket();
+        const other = await api.post(`/servers/${serverId}/channels`).set(owner.auth).send({ name: 'elsewhere', channelType: 3 });
+        expect(other.status).toBe(201);
+        const m1 = await api.post(`/channels/${other.body.id}/messages`).set(owner.auth).send({ content: 'do the thing' });
+        expect(m1.status).toBe(201);
+        // Addressed to another agent: the server's routing leaves the live agent out
+        const invite = await api.post(`/servers/${serverId}/agent-invites`).set(owner.auth).send({ username: 'OtherBot' });
+        const redeemed = await api.post('/agent-invites/redeem').send({ code: invite.body.code });
+        await api.post(`/channels/${channelId}/bots/${redeemed.body.botId}`).set(owner.auth);
+        const toOther = await api.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: '@OtherBot please do the other thing' });
+        expect(toOther.status).toBe(201);
+        await settle(600);
+        expect(ch.deliveries).toEqual([]);
+        expect(await rows(`SELECT 1 FROM agent_inbox WHERE session_id = $1 AND reason <> 'command'`, [sessionId])).toHaveLength(0);
     });
-    const sessionBot = () => (globalThis as any).__liveBot as string;
-    beforeEach(async () => { (globalThis as any).__liveBot = (await rows(`SELECT bot_id FROM agent_sessions WHERE id = $1`, [sessionId]))[0].bot_id.trim(); });
+
+    test('nothing is lost while the Channel is down: it is replayed in order when the connection comes up, the wake counted once', async () => {
+        // The startup period: no channel connection yet
+        const first = await postAs(owner, '@alpha one');
+        const second = await postAs(owner, '@alpha two');
+        await settle(500);
+        expect(await wakes()).toBe(0);
+        const a = await channelSocket();
+        await until(() => a.deliveries.length === 2);
+        expect(a.deliveries.map(x => x.message.id.trim())).toEqual([first, second]);
+        // The CLI restarts before acknowledging: a new connection gets both again, in order
+        a.s.disconnect();
+        await settle(300);
+        const b = await channelSocket();
+        await until(() => b.deliveries.length === 2);
+        expect(b.deliveries.map(x => x.message.id.trim())).toEqual([first, second]);
+        expect(await wakes()).toBe(2);
+        b.s.emit('LiveAck', { sessionId, messageId: first });
+        b.s.emit('LiveAck', { sessionId, messageId: second });
+        await until(async () => (await rows(`SELECT 1 FROM agent_inbox WHERE session_id = $1 AND reason <> 'command' AND acked_at IS NULL`, [sessionId])).length === 0);
+        const c = await channelSocket();
+        await settle(500);
+        expect(c.deliveries).toEqual([]);
+    });
+
+    test('a message not acknowledged within the bound is sent again, and one that waits too long is said in the channel once', async () => {
+        const a = await channelSocket();
+        const id = await postAs(owner, '@alpha ping');
+        await until(() => a.deliveries.length >= 2, 4000);
+        expect(a.deliveries.every(x => x.message.id.trim() === id)).toBe(true);
+        expect(await wakes()).toBe(1);
+        await ctx.db.query(`UPDATE agent_inbox SET created_at = NOW() - interval '1 hour' WHERE message_id = $1`, [id]);
+        await liveHub()!.sweep();
+        await liveHub()!.sweep();
+        await until(async () => (await notices('%could not be delivered%')).length === 1);
+        await liveHub()!.sweep();
+        expect((await notices('%could not be delivered%')).length).toBe(1);
+    });
+
+    test('a non-owner never reaches a subscription live session', async () => {
+        const ch = await channelSocket();
+        await postAs(member, '@alpha obey me');
+        await postAs(director, '@alpha obey me too');
+        await settle(700);
+        expect(ch.deliveries).toEqual([]);
+        expect(await rows(`SELECT 1 FROM agent_inbox WHERE session_id = $1 AND reason <> 'command'`, [sessionId])).toHaveLength(0);
+        expect(await wakes()).toBe(0);
+        const mine = await postAs(owner, '@alpha but you');
+        await until(() => ch.deliveries.length === 1);
+        expect(ch.deliveries[0].message.id.trim()).toBe(mine);
+    });
+
+    test('the owner\'s own bot wakes it by the owner-bot rules, and a bot with no such standing does not', async () => {
+        const ch = await channelSocket();
+        const invite = await api.post(`/servers/${serverId}/agent-invites`).set(owner.auth).send({ username: 'LeadBot' });
+        expect(invite.status, JSON.stringify(invite.body)).toBe(201);
+        const redeemed = await api.post('/agent-invites/redeem').send({ code: invite.body.code });
+        expect(redeemed.status, JSON.stringify(redeemed.body)).toBe(200);
+        expect([201, 409]).toContain((await api.post(`/channels/${channelId}/bots/${redeemed.body.botId}`).set(owner.auth)).status);
+        const lead = { Authorization: `Bot ${redeemed.body.token}` };
+        // Its terminal session (what makes the owner's bot count as the owner)
+        const term = io(base, { transports: ['websocket'], reconnection: false, autoConnect: false, auth: { type: 'bot', token: redeemed.body.token, mode: 'mcp' } });
+        sockets.push(term);
+        await connected(term);
+        await until(async () => (await rows(`SELECT 1 FROM agent_sessions WHERE kind = 'terminal' AND state = 'live' AND bot_id = $1`, [redeemed.body.botId])).length > 0);
+        const sent = await api.post(`/channels/${channelId}/messages`).set(lead).send({ content: '@alpha review please' });
+        expect(sent.status, JSON.stringify(sent.body)).toBe(201);
+        await until(() => ch.deliveries.length === 1);
+        expect(ch.deliveries[0].message).toMatchObject({ authorUsername: 'LeadBot', authorBot: true });
+        expect(ch.deliveries[0].authority).toBe('director');
+    });
+
+    test('two live sessions of one bot in two channels stay separate', async () => {
+        const two = await api.post(`/servers/${serverId}/channels`).set(owner.auth).send({ name: 'second', channelType: 3 });
+        expect(two.status).toBe(201);
+        const second = two.body.id as string;
+        const botId = botOf();
+        expect((await api.post(`/channels/${second}/bots/${botId}`).set(owner.auth)).status).toBe(201);
+        const started = await api.post(`/channels/${second}/agent-commands`).set(owner.auth).send({ command: 'start', profile: box.name, fresh: true });
+        expect(started.status, JSON.stringify(started.body)).toBe(201);
+        const secondSession = started.body.session.id as string;
+        await until(() => host.desired.some(d => d.sessions.length === 2));
+        const ch = await channelSocket();
+        const a = await postAs(owner, '@alpha in the first');
+        const b = (await api.post(`/channels/${second}/messages`).set(owner.auth).send({ content: '@alpha in the second' })).body.id.trim();
+        await until(() => ch.deliveries.length === 2);
+        const byId = new Map(ch.deliveries.map(x => [x.message.id.trim(), x]));
+        expect(byId.get(a)).toMatchObject({ sessionId, channelId });
+        expect(byId.get(b)).toMatchObject({ sessionId: secondSession, channelId: second });
+        expect(await rows(`SELECT session_id FROM agent_inbox WHERE message_id = $1`, [a])).toEqual([expect.objectContaining({ session_id: sessionId.padEnd(26) })]);
+    });
+
+    test('the wake limit, read at the moment of sending, holds further messages and says so once', async () => {
+        await api.patch(`/servers/${serverId}/agent-profiles/${box.profileId}`).set(owner.auth).send({ wakeBudget: 1 });
+        const ch = await channelSocket();
+        const first = await postAs(owner, '@alpha one');
+        await until(() => ch.deliveries.length === 1);
+        const second = await postAs(owner, '@alpha two');
+        await until(async () => (await notices('%wake limit%')).length === 1);
+        await settle(500);
+        expect(ch.deliveries.map(x => x.message.id.trim())).toEqual([first]);
+        expect(await wakes()).toBe(1);
+        expect(liveHub()!.isHeld(botOf())).toBe(true);
+        expect((await notices('%wake limit%')).length).toBe(1);
+        // Lifting the limit lets the held one go
+        await api.patch(`/servers/${serverId}/agent-profiles/${box.profileId}`).set(owner.auth).send({ wakeBudget: null });
+        await until(() => ch.deliveries.some(x => x.message.id.trim() === second), 8000);
+        expect(await wakes()).toBe(2);
+    });
 });
 
 describe('state, turns and limits', () => {
@@ -465,29 +629,36 @@ describe('state, turns and limits', () => {
         expect(liveHub()!.stateOf(sessionId)!.state).toBe('working');
     });
 
-    test('a message turn is recorded with the branch and commit at both ends, and counts as one wake', async () => {
-        const msg = (await api.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: '@alpha go' })).body.id as string;
-        hostSays('live:turn', { phase: 'start', messageId: msg.trim(), branch: 'agora/alpha/x', sha: SHA1 });
+    test('a turn is recorded with the branch and commit at both ends; it is "from a message" only if the server delivered that message', async () => {
+        const ch = await channelSocket();
+        const msg = await postAs(owner, '@alpha go');
+        await until(() => ch.deliveries.length === 1);
+        hostSays('live:turn', { phase: 'start', messageId: msg, branch: 'agora/alpha/x', sha: SHA1 });
         await until(async () => (await rows(`SELECT 1 FROM live_terminal_turns`)).length === 1);
         hostSays('live:turn', { phase: 'end', signal: 'stop_hook', branch: 'agora/alpha/x', sha: SHA2 });
         await until(async () => (await rows(`SELECT ended_at FROM live_terminal_turns`))[0].ended_at !== null);
-        const turn = (await rows(`SELECT * FROM live_terminal_turns`))[0];
-        expect(turn).toMatchObject({ source: 'message', message_id: msg.padEnd(26), branch: 'agora/alpha/x', start_sha: SHA1, end_sha: SHA2, end_signal: 'stop_hook', verified: true, unverified_reason: null });
-        expect((await rows(`SELECT wakes_used FROM agent_sessions WHERE id = $1`, [sessionId]))[0].wakes_used).toBe(1);
+        expect((await rows(`SELECT * FROM live_terminal_turns`))[0]).toMatchObject({ source: 'message', message_id: msg.padEnd(26), branch: 'agora/alpha/x', start_sha: SHA1, end_sha: SHA2, end_signal: 'stop_hook', agent_reported_clean: true, unverified_reason: null });
+        // A message id the server never delivered to this session is a typed turn, whatever the hook says
+        const other = (await api.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: 'not for the agent' })).body.id.trim();
+        hostSays('live:turn', { phase: 'start', messageId: other, branch: 'b', sha: SHA1 });
+        await until(async () => (await rows(`SELECT 1 FROM live_terminal_turns`)).length === 2);
+        expect((await rows(`SELECT source, message_id FROM live_terminal_turns ORDER BY id DESC LIMIT 1`))[0]).toEqual({ source: 'typed', message_id: null });
+        // The turn made no wake of its own: only the delivery did
+        expect(await wakes()).toBe(1);
     });
 
-    test('a typed turn is not a wake; a turn with no idle signal or no commit is recorded as unverified, with the reason', async () => {
+    test('a typed turn is not a wake; a turn with no idle signal or no commit is not agent_reported_clean, with the reason', async () => {
         hostSays('live:turn', { phase: 'start', messageId: null, branch: 'b', sha: SHA1 });
         await until(async () => (await rows(`SELECT 1 FROM live_terminal_turns`)).length === 1);
         hostSays('live:turn', { phase: 'end', signal: 'interrupted', branch: 'b', sha: SHA2 });
         await until(async () => (await rows(`SELECT ended_at FROM live_terminal_turns`))[0].ended_at !== null);
-        expect((await rows(`SELECT source, verified, unverified_reason FROM live_terminal_turns`))[0]).toEqual({ source: 'typed', verified: false, unverified_reason: 'no_idle_signal' });
-        expect((await rows(`SELECT wakes_used FROM agent_sessions WHERE id = $1`, [sessionId]))[0].wakes_used).toBe(0);
+        expect((await rows(`SELECT source, agent_reported_clean, unverified_reason FROM live_terminal_turns`))[0]).toEqual({ source: 'typed', agent_reported_clean: false, unverified_reason: 'no_idle_signal' });
+        expect(await wakes()).toBe(0);
         hostSays('live:turn', { phase: 'start', messageId: null, branch: 'b', sha: null });
         await until(async () => (await rows(`SELECT 1 FROM live_terminal_turns`)).length === 2);
         hostSays('live:turn', { phase: 'end', signal: 'stop_hook', branch: 'b', sha: SHA2 });
         await until(async () => (await rows(`SELECT 1 FROM live_terminal_turns WHERE ended_at IS NOT NULL`)).length === 2);
-        expect((await rows(`SELECT verified, unverified_reason FROM live_terminal_turns WHERE start_sha IS NULL`))[0]).toEqual({ verified: false, unverified_reason: 'no_commit_read' });
+        expect((await rows(`SELECT agent_reported_clean, unverified_reason FROM live_terminal_turns WHERE start_sha IS NULL`))[0]).toEqual({ agent_reported_clean: false, unverified_reason: 'no_commit_read' });
     });
 
     test('a bad commit or branch is not stored', async () => {
@@ -496,50 +667,74 @@ describe('state, turns and limits', () => {
         expect((await rows(`SELECT branch, start_sha, message_id, source FROM live_terminal_turns`))[0]).toEqual({ branch: null, start_sha: null, message_id: null, source: 'typed' });
     });
 
-    test('a box that disconnects mid-turn ends the turn as unverified and the state as stopped', async () => {
+    test('concurrent turn starts leave exactly one open row; the rest are closed as superseded', async () => {
+        for (let i = 0; i < 6; i++) hostSays('live:turn', { phase: 'start', messageId: null, branch: 'b', sha: SHA1 });
+        await until(async () => (await rows(`SELECT 1 FROM live_terminal_turns`)).length === 6);
+        await settle(200);
+        expect(await rows(`SELECT 1 FROM live_terminal_turns WHERE ended_at IS NULL`)).toHaveLength(1);
+        expect(await rows(`SELECT 1 FROM live_terminal_turns WHERE unverified_reason = 'superseded'`)).toHaveLength(5);
+    });
+
+    test('a start and its end sent back to back are recorded in order', async () => {
+        hostSays('live:turn', { phase: 'start', messageId: null, branch: 'b', sha: SHA1 });
+        hostSays('live:turn', { phase: 'end', signal: 'stop_hook', branch: 'b', sha: SHA2 });
+        await until(async () => (await rows(`SELECT 1 FROM live_terminal_turns WHERE ended_at IS NOT NULL`)).length === 1);
+        expect(await rows(`SELECT 1 FROM live_terminal_turns WHERE ended_at IS NULL`)).toHaveLength(0);
+    });
+
+    test('a turn row left open by an earlier life of the server is closed when a hub starts', async () => {
+        await ctx.db.query(`INSERT INTO live_terminal_turns (id, session_id, server_id, channel_id, source) SELECT $1, id, server_id, channel_id, 'typed' FROM agent_sessions WHERE id = $2`, [ulid(), sessionId]);
+        const fresh = new LiveHub(ctx.db, () => {}, { emitToBot() {}, botChannelConnected: () => false });
+        await fresh.start();
+        await fresh.stop();
+        expect(await rows(`SELECT 1 FROM live_terminal_turns WHERE ended_at IS NULL`)).toHaveLength(0);
+        expect((await rows(`SELECT unverified_reason FROM live_terminal_turns`))[0].unverified_reason).toBe('server_restarted');
+    });
+
+    test('turn rows are kept per session up to a bound', async () => {
+        for (let i = 0; i < MAX_TURNS_PER_SESSION + 3; i++) {
+            await ctx.db.query(`INSERT INTO live_terminal_turns (id, session_id, server_id, channel_id, source, ended_at) SELECT $1, id, server_id, channel_id, 'typed', NOW() FROM agent_sessions WHERE id = $2`, [ulid(), sessionId]);
+        }
+        hostSays('live:turn', { phase: 'start', messageId: null, branch: 'b', sha: SHA1 });
+        await until(async () => (await rows(`SELECT 1 FROM live_terminal_turns WHERE ended_at IS NULL`)).length === 1);
+        expect((await rows(`SELECT count(*)::int AS n FROM live_terminal_turns`))[0].n).toBe(MAX_TURNS_PER_SESSION);
+    });
+
+    test('a box that disconnects mid-turn ends the turn and the state as stopped, and comes back by itself', async () => {
         const w = await watch(ownerSession, sessionId);
         hostSays('live:turn', { phase: 'start', messageId: null, branch: 'b', sha: SHA1 });
         await until(async () => (await rows(`SELECT 1 FROM live_terminal_turns`)).length === 1);
         host.socket.disconnect();
         await until(async () => (await rows(`SELECT end_signal FROM live_terminal_turns`))[0].end_signal === 'host_lost');
         await until(() => w.events.some(e => e.event === 'live:state' && e.data.state === 'stopped' && e.data.note === 'box_disconnected'));
-        // It comes back by itself: the same session is offered again, and the screen is kept
         const again = await connectHost(box);
         await until(() => again.desired.length > 0);
         expect(again.desired[0].sessions[0].sessionId).toBe(sessionId);
     });
 
-    test('the wake limit holds further messages and says so', async () => {
-        await api.patch(`/servers/${serverId}/agent-profiles/${box.profileId}`).set(owner.auth).send({ wakeBudget: 1 });
-        const bot = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(box), auth: { type: 'bot', token: box.botToken, mode: 'channel', client: 'claude-code' } });
-        sockets.push(bot);
-        const holds: any[] = [];
-        bot.on('ChannelHold', h => holds.push(h));
-        await connected(bot);
-        const msg = (await api.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: '@alpha go' })).body.id as string;
-        hostSays('live:turn', { phase: 'start', messageId: msg.trim(), branch: 'b', sha: SHA1 });
-        await until(() => holds.some(h => h.held === true));
-        expect(holds.find(h => h.held)).toMatchObject({ reason: 'wake_limit' });
-        expect((await notices('%wake limit%')).length).toBe(1);
-    });
-
-    test('a turn past the run-time limit is interrupted once, and the channel is told', async () => {
+    test('a turn past the run-time limit is stopped step by step when the CLI ignores Escape: Escape, Escape, Ctrl-C, restart, one notice each', async () => {
         await api.patch(`/servers/${serverId}/agent-profiles/${box.profileId}`).set(owner.auth).send({ runTimeoutSec: 1 });
         await liveHub()!.sweep();
         hostSays('live:turn', { phase: 'start', messageId: null, branch: 'b', sha: SHA1 });
         await until(async () => (await rows(`SELECT 1 FROM live_terminal_turns`)).length === 1);
-        await settle(1200);
+        // The agent never reports an end: the steps come from the server's clock alone
+        const steps: number[] = [];
+        host.socket.on('live:interrupt', m => steps.push(m.step));
+        for (let i = 0; i < 40 && steps.length < 4; i++) { await settle(300); await liveHub()!.sweep(); }
+        expect(steps).toEqual([1, 2, 3, 4]);
         await liveHub()!.sweep();
         await liveHub()!.sweep();
-        await until(() => host.interrupts === 1);
-        await settle(200);
-        expect(host.interrupts).toBe(1);
-        expect((await notices('%run-time limit%')).length).toBe(1);
+        expect(steps).toEqual([1, 2, 3, 4]);
+        await until(async () => (await notices('%run-time limit%')).length === 4);
+        const texts = (await notices('%run-time limit%')).map(n => n.content);
+        expect(texts[0]).toMatch(/interrupted \(Escape\)/);
+        expect(texts[1]).toMatch(/again \(Escape\)/);
+        expect(texts[2]).toMatch(/Ctrl-C/);
+        expect(texts[3]).toMatch(/stopped and started again/);
     });
 
     test('a running terminal with no Channel connection is reported, in the state and in the channel, never typed around', async () => {
-        const botId = (await rows(`SELECT bot_id FROM agent_sessions WHERE id = $1`, [sessionId]))[0].bot_id.trim();
-        // An earlier test's channel connection may still be closing
+        const botId = botOf();
         await until(() => agentPresence.status(botId).status === 'offline');
         const w = await watch(ownerSession, sessionId);
         hostSays('live:state', { state: 'idle', note: null });
@@ -552,11 +747,152 @@ describe('state, turns and limits', () => {
         expect((await notices('%Channel is not connected%')).length).toBe(1);
         expect(host.input).toEqual([]);
         // The channel connecting clears it
-        const bot = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(box), auth: { type: 'bot', token: box.botToken, mode: 'channel', client: 'claude-code' } });
-        sockets.push(bot);
-        await connected(bot);
+        await channelSocket();
         await liveHub()!.sweep();
         await until(() => w.events.some(e => e.event === 'live:state' && e.data.note === null && e.data.state === 'idle'));
+    });
+});
+
+describe('a host that misbehaves', () => {
+    test('a flood of control events drops the host and is counted; the session itself stays', async () => {
+        const before = liveHub()!.hostFloods;
+        for (let i = 0; i < 200; i++) hostSays('live:state', { state: i % 2 ? 'idle' : 'working', note: null });
+        await until(() => liveHub()!.hostFloods > before);
+        await until(() => !host.socket.connected);
+        expect(liveHub()!.stateOf(sessionId)).not.toBeNull();
+        expect((await rows(`SELECT state FROM agent_sessions WHERE id = $1`, [sessionId]))[0].state).toBe('live');
+    });
+
+    test('"waiting on you" is said at most once per ten minutes however often the host flips', async () => {
+        for (let i = 0; i < 8; i++) { hostSays('live:state', { state: 'waiting', note: 'notification' }); hostSays('live:state', { state: 'idle', note: null }); await settle(30); }
+        await until(async () => (await notices('%waiting on you%')).length >= 1);
+        await settle(300);
+        expect((await notices('%waiting on you%')).length).toBe(1);
+    });
+
+    test('a host that keeps ignoring "slow down" is dropped', async () => {
+        for (let i = 0; i < 12; i++) hostSays('live:output', { data: Buffer.alloc(200 * 1024, 66) });
+        await until(() => host.paced > 0);
+        for (let i = 0; i < 12; i++) { await settle(120); hostSays('live:output', { data: Buffer.alloc(200 * 1024, 66) }); }
+        await until(() => !host.socket.connected, 8000);
+    });
+
+    test('an old-generation host socket is dropped at the next check, and the box\'s live sessions show stopped', async () => {
+        const w = await watch(ownerSession, sessionId);
+        await ctx.db.query(`UPDATE agent_boxes SET generation = generation + 1 WHERE id = $1`, [box.id]);
+        await liveHub()!.sweep();
+        await until(() => !host.socket.connected);
+        await until(() => w.events.some(e => e.event === 'live:state' && e.data.state === 'stopped'));
+    });
+
+    test('a revoked host token is dropped at the next check', async () => {
+        await ctx.db.query(`UPDATE agent_hosts SET revoked_at = NOW() WHERE box_id = $1`, [box.id]);
+        await liveHub()!.sweep();
+        await until(() => !host.socket.connected);
+    });
+});
+
+describe('viewers', () => {
+    test('a person holds at most five pages open on one session', async () => {
+        const open: Awaited<ReturnType<typeof watch>>[] = [];
+        for (let i = 0; i < 5; i++) open.push(await watch(directorSession, sessionId));
+        expect(await refusal(viewer(directorSession, sessionId))).toBe('too_many_viewers');
+        // Someone else still can
+        await watch(ownerSession, sessionId);
+        expect(open).toHaveLength(5);
+    });
+
+    test('a viewer whose cookie session was revoked is dropped at the next check, with the account check the gateway uses', async () => {
+        const d = await watch(directorSession, sessionId);
+        await ctx.db.query(`UPDATE users SET token_version = token_version + 1 WHERE id = $1`, [director.userId]);
+        await liveHub()!.sweep();
+        expect(await wait(d.s, 'live:exit')).toEqual({ reason: 'access_changed' });
+    });
+
+    test('a suspended person is dropped too', async () => {
+        const d = await watch(directorSession, sessionId);
+        await ctx.db.query(`UPDATE users SET account_status = 'suspended' WHERE id = $1`, [director.userId]);
+        await liveHub()!.sweep();
+        expect(await wait(d.s, 'live:exit')).toEqual({ reason: 'access_changed' });
+    });
+
+    test('a new viewer makes the CLI redraw, at most every few seconds', async () => {
+        const before = host.redraws;
+        await watch(ownerSession, sessionId);
+        await until(() => host.redraws > before);
+        const mid = host.redraws;
+        await watch(directorSession, sessionId);
+        await settle(300);
+        expect(host.redraws).toBe(mid);
+    });
+
+    test('typing waits for the confirmation to be on record', async () => {
+        const o = await watch(ownerSession, sessionId);
+        o.s.emit('live:take', { ack: true });
+        await wait(o.s, 'live:taken');
+        expect((await rows(`SELECT 1 FROM audit_log WHERE action = 'live_terminal_take'`)).length).toBe(1);
+    });
+});
+
+describe('starting and the mode switch', () => {
+    const end = () => api.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'end', profile: box.name });
+    const start = () => api.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'start', profile: box.name, fresh: true });
+
+    test('/start is refused with the reason when the box is on an image without live terminals, has no connected host, or is not running', async () => {
+        await end();
+        await ctx.db.query(`UPDATE agent_hosts SET live_protocol = NULL WHERE box_id = $1`, [box.id]);
+        const old = await start();
+        expect(old.status).toBe(409);
+        expect(old.body).toMatchObject({ error: 'live_terminal_unavailable' });
+        expect(old.body.message).toMatch(/older than live terminals|has not connected/);
+        await ctx.db.query(`UPDATE agent_hosts SET live_protocol = 1 WHERE box_id = $1`, [box.id]);
+        await ctx.db.query(`UPDATE agent_boxes SET state = 'stopped' WHERE id = $1`, [box.id]);
+        const stopped = await start();
+        expect(stopped.status).toBe(409);
+        expect(stopped.body.message).toMatch(/box is not running/);
+        await ctx.db.query(`UPDATE agent_boxes SET state = 'running' WHERE id = $1`, [box.id]);
+        expect((await start()).status).toBe(201);
+    });
+
+    test('flipping the mode leaves thread-scoped sessions alone and moves the channel one only when it is resumed in the new mode', async () => {
+        const thread = (await api.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: 'a thread root' })).body.id.trim();
+        await end();
+        await ctx.db.query(
+            `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, profile_id, started_by, state, kind, thread_id, live_mode)
+             SELECT $1, server_id, channel_id, bot_id, profile_id, started_by, 'shelved', 'hosted', $2, false FROM agent_sessions WHERE id = $3`, [ulid(), thread, sessionId]);
+        await ctx.db.query(`UPDATE agent_sessions SET state = 'shelved' WHERE id = $1`, [sessionId]);
+        const flip = await api.patch(`/servers/${serverId}/agent-profiles/${box.profileId}`).set(owner.auth).send({ sessionMode: 'runs' });
+        expect(flip.status, JSON.stringify(flip.body)).toBe(200);
+        expect((await rows(`SELECT live_mode FROM agent_sessions WHERE thread_id IS NOT NULL`))[0].live_mode).toBe(false);
+        expect((await rows(`SELECT live_mode FROM agent_sessions WHERE id = $1`, [sessionId]))[0].live_mode).toBe(false);
+        const back = await api.patch(`/servers/${serverId}/agent-profiles/${box.profileId}`).set(owner.auth).send({ sessionMode: 'live' });
+        expect(back.status).toBe(200);
+        expect((await rows(`SELECT live_mode FROM agent_sessions WHERE thread_id IS NOT NULL`))[0].live_mode).toBe(false);
+        expect((await rows(`SELECT live_mode FROM agent_sessions WHERE id = $1`, [sessionId]))[0].live_mode).toBe(true);
+    });
+
+    test('a task or subtask session of a live agent is an ordinary per-wake session in its own thread, and is not put on standby', async () => {
+        const thread = (await api.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: 'task root' })).body.id.trim();
+        const id = ulid();
+        await ctx.db.query(
+            `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, profile_id, started_by, state, kind, thread_id, live_mode)
+             SELECT $1, server_id, channel_id, bot_id, profile_id, started_by, 'live', 'hosted', $2, false FROM agent_sessions WHERE id = $3`, [id, thread, sessionId]);
+        const reply = await api.post(`/channels/${channelId}/messages/${thread}/replies`).set(owner.auth).send({ content: '@alpha work on this task' });
+        expect(reply.status, JSON.stringify(reply.body)).toBe(201);
+        await until(async () => (await rows(`SELECT 1 FROM agent_inbox WHERE session_id = $1 AND reason <> 'command'`, [id])).length === 1);
+        // ... and the host's normal claim finds it (a per-wake run), while the live session is still skipped
+        const hostAuth = { Authorization: `AgentHost ${box.hostToken}`, ...edgeFor(box) };
+        const claim = await api.get('/agent-hosts/@me/runs/next?wait=0').set(hostAuth);
+        expect(claim.status, JSON.stringify(claim.body)).toBe(200);
+        expect(claim.body.session.id).toBe(id);
+    });
+
+    test('the host asks whether it should open its live socket at all', async () => {
+        const hostAuth = { Authorization: `AgentHost ${box.hostToken}`, ...edgeFor(box) };
+        expect((await api.get('/agent-hosts/@me/live').set(hostAuth)).body).toEqual({ enabled: true });
+        await end();
+        await api.patch(`/servers/${serverId}/agent-profiles/${box.profileId}`).set(owner.auth).send({ sessionMode: 'runs' });
+        expect((await api.get('/agent-hosts/@me/live').set(hostAuth)).body).toEqual({ enabled: false });
     });
 });
 
@@ -566,7 +902,8 @@ describe('ending', () => {
         const end = await api.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'end', profile: 'alpha' });
         expect(end.status, JSON.stringify(end.body)).toBe(200);
         await liveHub()!.sweep();
-        expect(await wait(w.s, 'live:exit')).toEqual({ reason: 'session_ended' });
+        await until(() => w.events.some(e => e.event === 'live:exit'));
+        expect(w.events.find(e => e.event === 'live:exit')!.data).toEqual({ reason: 'session_ended' });
         await until(() => host.desired.length >= 2);
         expect(host.desired[host.desired.length - 1].sessions).toEqual([]);
         expect(await refusal(viewer(ownerSession, sessionId))).toBe('forbidden');

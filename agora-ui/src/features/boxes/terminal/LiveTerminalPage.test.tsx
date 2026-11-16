@@ -202,3 +202,14 @@ it('tells the person why they were disconnected, and the box\'s end of it', asyn
   act(() => sockets[0].fire('connect_error', new Error('forbidden')));
   expect(await screen.findByTestId('live-ended')).toHaveTextContent('may watch');
 });
+
+it('keeps one visible warning while typing, and passes on no mouse or focus reports', async () => {
+  const s = await connect();
+  expect(screen.queryByTestId('live-typing-warning')).toBeNull();
+  act(() => s.fire('live:taken'));
+  expect(screen.getByTestId('live-typing-warning')).toHaveTextContent('The agent sees everything typed here. Never type a password, token or login code.');
+  for (const report of ['[<0;10;5M', '[M !!', '[I', '[O']) type(terms[0], report);
+  expect(sent(s, 'live:input')).toEqual([]);
+  type(terms[0], '[A');
+  expect(sent(s, 'live:input')).toEqual(['[A']);
+});

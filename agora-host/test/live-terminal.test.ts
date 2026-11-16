@@ -300,7 +300,7 @@ describe('the pty', () => {
         t.fire('live:input', { sessionId: SID, data: 'a string is not bytes' });
         t.fire('live:resize', { sessionId: SID, cols: 80, rows: 24 });
         t.fire('live:resize', { sessionId: SID, cols: 0, rows: 24 });
-        t.fire('live:interrupt', { sessionId: SID });
+        t.fire('live:interrupt', { sessionId: SID, step: 1 });
         expect(ptys[0].written.map(b => b.toString())).toEqual(['ls\r', '\x1b']);
         expect(ptys[0].sizes).toEqual([[80, 24]]);
     });
@@ -346,5 +346,52 @@ describe('the trust-folder question', () => {
     await writeFile(join(state, '.claude.json'), '[1]');
     await trustFolder(state, '/w');
     expect(await readFile(join(state, '.claude.json'), 'utf8')).toBe('[1]');
+  });
+});
+
+describe('the run-time stop escalates on the server steps', () => {
+  it('Escape, Escape, Ctrl-C, then the CLI is stopped and comes back resumed', async () => {
+    const { t, ptys, opts, timers } = setup();
+    t.fire('live:desired', { sessions: [spec()] });
+    await flush();
+    t.fire('live:interrupt', { sessionId: SID, step: 1 });
+    t.fire('live:interrupt', { sessionId: SID, step: 2 });
+    t.fire('live:interrupt', { sessionId: SID, step: 3 });
+    expect(ptys[0].written.map(b => b.toString())).toEqual(['', '', '']);
+    expect(ptys[0].killed).toBe(0);
+    t.fire('live:interrupt', { sessionId: SID, step: 4 });
+    expect(ptys[0].killed).toBe(1);
+    ptys[0].exit(0);
+    timers.filter(x => !x.cancelled && x.ms === 1000)[0].fn();
+    await flush();
+    expect(opts[1].command.slice(-2)).toEqual(['--resume', CONV]);
+  });
+  it('ignores a step it does not know', async () => {
+    const { t, ptys } = setup();
+    t.fire('live:desired', { sessions: [spec()] });
+    await flush();
+    for (const step of [0, 5, 'x', null]) t.fire('live:interrupt', { sessionId: SID, step });
+    expect(ptys[0].written).toEqual([]);
+    expect(ptys[0].killed).toBe(0);
+  });
+});
+
+describe('hook events are handled in the order they arrive', () => {
+  it('a Stop right behind its UserPromptSubmit still sends its end after its start', async () => {
+    const { m, t } = setup();
+    t.fire('live:desired', { sessions: [spec()] });
+    await flush();
+    await Promise.all([m.hook(SID, 'UserPromptSubmit', { prompt: 'a' }), m.hook(SID, 'Stop', {})]);
+    expect(t.of('live:turn').map(x => x.phase)).toEqual(['start', 'end']);
+  });
+  it('gives the CLI its own session id only, and redraws a screen on request', async () => {
+    const { t, ptys, opts } = setup();
+    t.fire('live:desired', { sessions: [spec()] });
+    await flush();
+    expect(opts[0].env.AGORA_LIVE_SESSION).toBe(SID);
+    t.fire('live:redraw', { sessionId: SID });
+    expect(ptys[0].sizes[0]).toEqual([121, 32]);
+    await new Promise(r => setTimeout(r, 200));
+    expect(ptys[0].sizes[1]).toEqual([120, 32]);
   });
 });

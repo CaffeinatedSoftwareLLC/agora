@@ -375,6 +375,19 @@ async function startSession(db: any, channelId: string, profileName: string, onL
     const liveMode = profile.session_mode === 'live';
     // Connected from a terminal: the terminal answers here, so ask before starting a hosted session
     const terminal = liveMode ? null : await terminalFor(db, channelId, botId);
+    // A live session needs its box running and its host able to carry a live terminal (an image older than version 8, or a host that
+    // has not connected yet, cannot): refuse with the reason rather than start a session nothing runs
+    if (liveMode) {
+        const box = (await db.query(
+            `SELECT b.state, b.desired_state, h.live_protocol, h.revoked_at FROM agent_boxes b JOIN agent_hosts h ON h.id = b.host_id
+             WHERE b.profile_id = $1 AND b.deleted_at IS NULL`, [profile.id])).rows[0];
+        if (!box || box.revoked_at || box.desired_state !== 'running' || box.state !== 'running') {
+            throw new CommandError(409, { error: 'live_terminal_unavailable', message: `${profile.name} is set to run in a live terminal, but its box is not running. Start the box first.` });
+        }
+        if (!(Number(box.live_protocol) >= 1)) {
+            throw new CommandError(409, { error: 'live_terminal_unavailable', message: `${profile.name} is set to run in a live terminal, but its box cannot carry one yet: its image is older than live terminals (rebuild the box), or its host has not connected (it does within a minute of switching the mode).` });
+        }
+    }
     if (terminal && onLive !== 'standby') {
         if (onLive === 'keep') return { status: 200, body: { action: 'kept_terminal', session: sessionJson(terminal) } };
         if (onLive === 'ask') throw new CommandError(409, {

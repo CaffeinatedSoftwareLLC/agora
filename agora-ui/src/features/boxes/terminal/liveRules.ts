@@ -39,10 +39,12 @@ const EXIT_TEXT: Record<string, string> = {
   viewer_stalled: 'This page stopped reading the screen, so it was disconnected. Reload to watch again.',
   server_stopped: 'Agora stopped.',
   left: 'You left the terminal.',
+  too_many_viewers: 'Too many pages are open on this terminal. Close one and reconnect.',
 };
 export const liveExitText = (reason: string | null | undefined) => (reason && EXIT_TEXT[reason]) || 'The terminal connection ended.';
 
 const SOCKET_ERRORS: Record<string, string> = {
+  too_many_viewers: 'Too many pages are open on this terminal. Close one and reconnect.',
   forbidden: 'There is no live terminal here that you may watch. Only the server owner and people who can direct agents in the channel can.',
   origin_not_allowed: 'Open the terminal from this site\'s own pages.',
   'Authentication required': 'Sign in again, then open the terminal.',
