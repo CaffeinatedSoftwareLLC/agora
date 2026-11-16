@@ -312,3 +312,62 @@ describe('--no-permission-relay (S0506)', () => {
         await client.close();
     });
 });
+
+describe('held pushes (a live terminal whose owner has the keyboard)', () => {
+    it('holds a gated message while Agora says hold, and delivers it, in order, on release', async () => {
+        const { sent, socket, channel, ready } = setup();
+        await ready();
+        socket.emit('ChannelHold', { held: true });
+        await vi.waitFor(() => expect(channel.isHeld).toBe(true));
+        expect(await channel.onMessage(msg({ content: 'first' }))).toBe(false);
+        expect(await channel.onMessage(msg({ content: 'second' }))).toBe(false);
+        expect(sent).toHaveLength(0);
+        expect(channel.heldCount).toBe(2);
+        socket.emit('ChannelHold', { held: false });
+        await vi.waitFor(() => expect(sent).toHaveLength(2));
+        expect(sent.map(s => s.params.content)).toEqual(['first', 'second']);
+        expect(channel.heldCount).toBe(0);
+        // After the release, pushes are immediate again
+        expect(await channel.onMessage(msg({ content: 'third' }))).toBe(true);
+        expect(sent).toHaveLength(3);
+    });
+
+    it('still gates by sender while holding: a held message is never one that would not have been pushed', async () => {
+        const { sent, socket, channel, ready } = setup();
+        await ready();
+        socket.emit('ChannelHold', { held: true });
+        await vi.waitFor(() => expect(channel.isHeld).toBe(true));
+        await channel.onMessage(msg({ authorId: MEMBER, authorAuthority: null as any }));
+        await channel.onMessage(msg({ authorId: DIRECTOR, authorAuthority: 'director' }));
+        expect(channel.heldCount).toBe(0);
+        socket.emit('ChannelHold', { held: false });
+        await new Promise(r => setTimeout(r, 20));
+        expect(sent).toHaveLength(0);
+    });
+
+    it('releases when the connection is lost, since Agora can no longer say', async () => {
+        const { sent, socket, channel, ready } = setup();
+        await ready();
+        socket.emit('ChannelHold', { held: true });
+        await vi.waitFor(() => expect(channel.isHeld).toBe(true));
+        await channel.onMessage(msg());
+        socket.emit('disconnect');
+        await vi.waitFor(() => expect(sent).toHaveLength(1));
+        expect(channel.isHeld).toBe(false);
+    });
+
+    it('treats anything but held:true as not held, and keeps a bounded queue', async () => {
+        const { sent, socket, channel, ready } = setup();
+        await ready();
+        socket.emit('ChannelHold', { held: 'yes' });
+        await new Promise(r => setTimeout(r, 10));
+        expect(channel.isHeld).toBe(false);
+        socket.emit('ChannelHold', { held: true });
+        await vi.waitFor(() => expect(channel.isHeld).toBe(true));
+        for (let i = 0; i < 60; i++) await channel.onMessage(msg({ content: `m${i}` }));
+        expect(channel.heldCount).toBe(50);
+        socket.emit('ChannelHold', { held: false });
+        await vi.waitFor(() => expect(sent).toHaveLength(50));
+        expect(sent[0].params.content).toBe('m10');
+    });
+});

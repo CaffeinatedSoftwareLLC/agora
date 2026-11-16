@@ -65,7 +65,7 @@ export function sessionJson(r: any, viewerId?: string) {
         // As in the profile JSON (docs/agent-boxes.md §10): hostMode drives the owner-only rule, boxed the label
         hostMode: !!r.host_mode, boxed: !!r.boxed,
         // Live terminal mode (docs/planning/live-terminals.md): the session's own interactive CLI; no token use is measured
-        liveMode: !!r.live_mode, liveState: r.live_state ?? null, liveNote: r.live_note ?? null, tokensMeasured: !r.live_mode,
+        serverId: r.server_id?.trim() ?? null, liveMode: !!r.live_mode, liveState: r.live_state ?? null, liveNote: r.live_note ?? null, tokensMeasured: !r.live_mode,
         // What `@agent /command` can do for this session's CLI (docs/agent-commands.md); a terminal session can't be driven from Agora
         adapter: r.adapter ?? null, commands: r.kind === 'terminal' || r.live_mode ? [] : controlsOf(r.adapter), pendingCommand: r.pending_command ?? null,
         branch: r.branch ?? null, baseSha: r.base_sha ?? null, headSha: r.head_sha ?? null,

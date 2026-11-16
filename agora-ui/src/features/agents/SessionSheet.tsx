@@ -42,6 +42,7 @@ interface SessionSheetProps {
 
 const DOT_CLASS: Record<ChipState | 'none', string> = {
   working: 'bg-online motion-safe:animate-pulse',
+  waiting: 'bg-warn motion-safe:animate-pulse',
   idle: 'bg-online',
   sleeping: 'bg-accent',
   standby: 'bg-text-muted',
@@ -59,6 +60,22 @@ const BTN_PRIMARY = `${BTN} bg-primary text-on-primary hover:bg-primary-hover`;
 const BTN_SECONDARY = `${BTN} border border-border bg-surface-hover text-text hover:bg-bg`;
 const BTN_DANGER = `${BTN} border border-danger/40 bg-danger/15 text-danger hover:bg-danger/25`;
 const BTN_SMALL = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg px-3 text-sm text-text hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50';
+
+/** What the box last reported for a live-terminal session, in a sentence (fixed codes only, never screen text). */
+export function liveStateText(s: Pick<AgentSession, 'liveState' | 'liveNote'>): string {
+  const note = s.liveNote === 'no_signal' ? ' The CLI is showing a startup prompt: open the terminal and answer it.'
+    : s.liveNote === 'notification' ? ' It is asking you something (a permission or a dialog): open the terminal.'
+    : s.liveNote === 'channel_unavailable' ? ' Its Claude Code Channel is not connected, so chat messages cannot reach it (they are not typed in).'
+    : s.liveNote === 'box_disconnected' ? ' The box is not connected to Agora.' : '';
+  switch (s.liveState) {
+    case 'working': return `Working.${note}`;
+    case 'waiting': return `Waiting on you.${note}`;
+    case 'idle': return `Idle, listening for messages.${note}`;
+    case 'restarting': return 'The CLI ended and is being started again with its conversation resumed.';
+    case 'stopped': return `Not running.${note}`;
+    default: return 'Starting.';
+  }
+}
 
 function shortId(id: string): string {
   return `${id.slice(0, 8)}…`;
@@ -273,12 +290,28 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
           <BoxModeBadge profile={current ?? profiles?.find(p => p.name === selected)} />
           {current && current.state !== 'ended' && (
             <span className="font-mono text-xs text-text-muted">
-              {current.wakesUsed} {current.wakesUsed === 1 ? 'wake' : 'wakes'} · {compactTokens(current.tokensUsed)} tokens
+              {current.wakesUsed} {current.wakesUsed === 1 ? 'wake' : 'wakes'} · {current.liveMode ? 'tokens not measured in live terminal mode' : `${compactTokens(current.tokensUsed)} tokens`}
             </span>
           )}
         </p>
 
         {state === 'working' && current?.run && streams[current.run.id] && <LiveWork stream={streams[current.run.id]} name={current.profile} />}
+
+        {live && current?.liveMode && (
+          <div className="space-y-2 rounded-lg border border-border p-3 text-sm" data-testid="live-terminal-panel">
+            <p className="font-medium">Live terminal</p>
+            <p className="text-text-muted">{liveStateText(current)}</p>
+            <p className="text-text-muted">
+              This agent runs its own interactive CLI in a terminal in its box. Chat messages reach it as Channel pushes, never as typed keys.
+              To compact or clear it, type the command in its terminal. Token budgets need per-wake runs.
+            </p>
+            {current.serverId && (
+              <a className={BTN_PRIMARY} href={`/live-terminal/${current.serverId}/${current.id}`} target="_blank" rel="noopener noreferrer" data-testid="open-live-terminal">
+                Open terminal
+              </a>
+            )}
+          </div>
+        )}
 
         {live && current && (
           <div className="space-y-2 rounded-lg border border-border p-3 text-sm">
@@ -336,7 +369,7 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
             This agent is connected from a terminal, which answers here. This hosted session waits and is not woken until the terminal disconnects.
           </p>
         )}
-        {current && <SessionBudget key={current.id} session={current} channelId={channelId} onChanged={onChanged} />}
+        {current && !current.liveMode && <SessionBudget key={current.id} session={current} channelId={channelId} onChanged={onChanged} />}
         {current && <SessionWorkspace key={`workspace-${current.id}`} sessionId={current.id} channelId={channelId} running={current.running} onChanged={onChanged} />}
         {current?.recentRuns && current.recentRuns.length > 0 && <details className="text-sm">
           <summary className="cursor-pointer">Recent runs</summary>

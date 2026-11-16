@@ -25,6 +25,7 @@ import { AccountPage } from './features/account/AccountPage';
 import { PageSpinner } from './components/ui/PageSpinner';
 // xterm is large and only this route uses it
 const BoxTerminalPage = lazy(() => import('./features/boxes/terminal/BoxTerminalPage').then(m => ({ default: m.BoxTerminalPage })));
+const LiveTerminalPage = lazy(() => import('./features/boxes/terminal/LiveTerminalPage').then(m => ({ default: m.LiveTerminalPage })));
 
 export default function App() {
   useApplyPalette();
@@ -58,6 +59,7 @@ export default function App() {
                 <Route path="/account" element={<AuthGuard><AccountPage /></AuthGuard>} />
                 {/* The terminal in a box: no SocketProvider and no shell, so no message or channel is on this page */}
                 <Route path="/terminal/:boxId" element={<AuthGuard><Suspense fallback={<PageSpinner />}><BoxTerminalPage /></Suspense></AuthGuard>} />
+                <Route path="/live-terminal/:serverId/:sessionId" element={<AuthGuard><Suspense fallback={<PageSpinner />}><LiveTerminalPage /></Suspense></AuthGuard>} />
                 {/* Shared SocketProvider for /app and /settings */}
                 <Route path="/app/*" element={
                   <AuthGuard>

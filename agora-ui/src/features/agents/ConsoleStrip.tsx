@@ -169,7 +169,7 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
       className="console-strip flex min-h-[44px] w-full min-w-0 max-w-full shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-surface/60 px-3"
     >
       {chips.map(chip => {
-        const tokens = chip.session.state !== 'ended' && chip.session.tokensUsed > 0 ? compactTokens(chip.session.tokensUsed) : null;
+        const tokens = chip.session.state !== 'ended' && !chip.session.liveMode && chip.session.tokensUsed > 0 ? compactTokens(chip.session.tokensUsed) : null;
         // A rate-limited agent says so on the chip, with the reset time (#147)
         const resets = chip.state === 'sleeping' && chip.session.sleepingUntil ? resetTime(chip.session.sleepingUntil) : null;
         return (
@@ -185,6 +185,7 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
               <StateDot state={chip.state} />
               <span className="font-medium">{chip.profile}</span>
               <BoxModeBadge profile={chip.session} />
+              {chip.session.liveMode && chip.session.state === 'live' && <span className="text-xs text-text-muted" data-testid="live-chip-note">terminal{chip.state === 'waiting' ? ' · waiting on you' : ''}</span>}
               {resets && <span className="text-xs text-text-muted">Sleeping · <span className="hidden sm:inline">resets </span>{resets}</span>}
               {tokens && <span className="font-mono text-xs text-text-muted">{tokens}</span>}
             </span>

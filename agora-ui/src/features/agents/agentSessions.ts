@@ -102,6 +102,16 @@ export interface AgentSession {
   /** A subtask's parent session. */
   parentSessionId?: string | null;
   title?: string | null;
+  /** The server this session is in (the live terminal page needs it). */
+  serverId?: string;
+  /**
+   * Live terminal mode (docs/planning/live-terminals.md): the agent's own interactive CLI runs in a
+   * terminal in its box. liveState is what the box reported; its tokens are not measured.
+   */
+  liveMode?: boolean;
+  liveState?: 'starting' | 'idle' | 'working' | 'waiting' | 'restarting' | 'stopped' | null;
+  liveNote?: string | null;
+  tokensMeasured?: boolean;
 }
 
 export type OwnerTokenReason = 'mixed' | 'other_maker' | 'other_bot_owner' | 'started_by_other' | 'no_token' | 'agent_token' | 'owner_only_token';
@@ -261,7 +271,7 @@ function trim1(x: number): string {
 }
 
 /** 'standby': live, but the agent is connected from a terminal, which answers instead (#112). */
-export type ChipState = 'working' | 'idle' | 'sleeping' | 'standby' | 'shelved' | 'ended';
+export type ChipState = 'working' | 'waiting' | 'idle' | 'sleeping' | 'standby' | 'shelved' | 'ended';
 
 export interface AgentChip {
   profile: string;
@@ -274,6 +284,7 @@ export interface AgentChip {
 
 export const STATE_LABEL: Record<ChipState, string> = {
   working: 'Live and working',
+  waiting: 'Live terminal, waiting on you',
   idle: 'Live and idle',
   sleeping: 'Sleeping (rate limited)',
   standby: 'On standby (connected from a terminal)',
@@ -282,6 +293,8 @@ export const STATE_LABEL: Record<ChipState, string> = {
 };
 
 export function sessionState(s: AgentSession, now = Date.now()): ChipState {
+  // A live-terminal session has no runs: what its box reports is the state
+  if (s.state === 'live' && s.liveMode) return s.liveState === 'working' ? 'working' : s.liveState === 'waiting' ? 'waiting' : 'idle';
   if (s.state === 'live') return s.running ? 'working' : isSleeping(s, now) ? 'sleeping' : 'idle';
   return s.state;
 }
@@ -296,7 +309,7 @@ export function resetTime(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-const RANK: Record<ChipState, number> = { working: 0, idle: 1, sleeping: 2, standby: 3, shelved: 4, ended: 5 };
+const RANK: Record<ChipState, number> = { working: 0, waiting: 0, idle: 1, sleeping: 2, standby: 3, shelved: 4, ended: 5 };
 
 function byRecent(a: AgentSession, b: AgentSession): number {
   return (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? '');
@@ -325,7 +338,8 @@ export function deriveChips(sessions: AgentSession[]): AgentChip[] {
   for (const [profile, list] of groups) {
     list.sort(byRecent);
     const session = list.find(s => s.state === 'live') ?? list[0];
-    const standby = session.state === 'live' && !session.running && !!session.botId && terminal.has(session.botId.trim());
+    // (a live-terminal session is the terminal: nothing is on standby behind it)
+    const standby = session.state === 'live' && !session.liveMode && !session.running && !!session.botId && terminal.has(session.botId.trim());
     chips.push({ profile, state: standby ? 'standby' : sessionState(session), session, sessions: list });
   }
   return chips.sort((a, b) => RANK[a.state] - RANK[b.state] || byRecent(a.session, b.session) || a.profile.localeCompare(b.profile));
@@ -449,13 +463,15 @@ export function ownSessionChips(
 ): OwnSessionChip[] {
   const terminal = new Map(sessions.filter(s => s.kind === 'terminal' && s.state === 'live' && s.botId).map(s => [s.botId!.trim(), s]));
   const hosted = new Set(sessions.filter(s => s.kind !== 'terminal' && s.state === 'live' && s.botId && !s.threadId).map(s => s.botId!.trim()));
+  // A live-terminal agent's own CLI is shown by its hosted chip, not as a second, dashed one
+  const liveBots = new Set(sessions.filter(s => s.kind !== 'terminal' && s.state === 'live' && s.liveMode && s.botId).map(s => s.botId!.trim()));
   const chips: OwnSessionChip[] = [...present]
     // A hosted chip already stands for an agent without a terminal session
-    .filter(p => terminal.has(p.userId.trim()) || !hosted.has(p.userId.trim()))
+    .filter(p => !liveBots.has(p.userId.trim()) && (terminal.has(p.userId.trim()) || !hosted.has(p.userId.trim())))
     .map(p => ({ userId: p.userId, username: p.username, status: p.status, mode: p.mode, session: terminal.get(p.userId.trim()) }));
   // A terminal session in its reconnect grace period, or before presence arrived
   for (const [botId, session] of terminal) {
-    if (!chips.some(c => c.userId.trim() === botId)) {
+    if (!liveBots.has(botId) && !chips.some(c => c.userId.trim() === botId)) {
       chips.push({ userId: botId, username: session.botUsername, status: 'connected', mode: session.terminalMode ?? null, session });
     }
   }
