@@ -639,7 +639,7 @@ describe('state, turns and limits', () => {
         await until(async () => (await rows(`SELECT ended_at FROM live_terminal_turns`))[0].ended_at !== null);
         expect((await rows(`SELECT * FROM live_terminal_turns`))[0]).toMatchObject({ source: 'message', message_id: msg.padEnd(26), branch: 'agora/alpha/x', start_sha: SHA1, end_sha: SHA2, end_signal: 'stop_hook', agent_reported_clean: true, unverified_reason: null });
         // A message id the server never delivered to this session is a typed turn, whatever the hook says
-        const other = (await api.post(`/channels/${channelId}/messages`).set(owner.auth).send({ content: 'not for the agent' })).body.id.trim();
+        const other = ulid();
         hostSays('live:turn', { phase: 'start', messageId: other, branch: 'b', sha: SHA1 });
         await until(async () => (await rows(`SELECT 1 FROM live_terminal_turns`)).length === 2);
         expect((await rows(`SELECT source, message_id FROM live_terminal_turns ORDER BY id DESC LIMIT 1`))[0]).toEqual({ source: 'typed', message_id: null });
