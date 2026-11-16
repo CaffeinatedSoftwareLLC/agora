@@ -1,5 +1,5 @@
 import { createServer, type Server as NetServer } from 'node:net';
-import { chmod, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -107,6 +107,26 @@ export function hookSettings(hookCommand = HOOK_COMMAND): object {
         // Unattended start: the bypass-permissions confirmation is the box's decision, not the owner's per start
         skipDangerousModePermissionPrompt: true,
     };
+}
+
+/**
+ * Mark the session's worktree as trusted in the CLI's own configuration, so the "do you trust this folder"
+ * question is not asked at an unattended start. It only merges one key into `<state dir>/.claude.json`
+ * (the file the login also lives in) and leaves the file alone when it cannot be read as an object.
+ * Whether the real CLI honours it is one of the things only a real login can prove.
+ */
+export async function trustFolder(stateDir: string, cwd: string): Promise<void> {
+    const file = join(stateDir, '.claude.json');
+    let data: Record<string, any> = {};
+    try { data = JSON.parse(await readFile(file, 'utf8')); } catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return; }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+    const projects = data.projects && typeof data.projects === 'object' && !Array.isArray(data.projects) ? data.projects : {};
+    const current = projects[cwd] && typeof projects[cwd] === 'object' ? projects[cwd] : {};
+    if (current.hasTrustDialogAccepted === true) return;
+    data.projects = { ...projects, [cwd]: { ...current, hasTrustDialogAccepted: true } };
+    const tmp = `${file}.${process.pid}.tmp`;
+    await writeFile(tmp, JSON.stringify(data), { mode: 0o600 });
+    await rename(tmp, file);
 }
 
 /** `message_id` of a prompt that arrived as an Agora Channel push; null for anything else (typed text). */
@@ -243,6 +263,7 @@ export class LiveManager {
         await mkdir(local.stateDir, { recursive: true, mode: 0o700 });
         const ws = this.o.workspace ? await this.o.workspace(local, r.spec)
             : await ensureWorkspace(local, { session: { id: r.spec.sessionId }, profile: { name: r.spec.profile } }).then(w => ({ cwd: w.cwd, branch: w.branch }));
+        await trustFolder(local.stateDir, ws.cwd).catch(() => {});
         const dir = join(local.stateDir, `live-${r.spec.sessionId.slice(-10)}`);
         await mkdir(dir, { recursive: true, mode: 0o700 });
         const mcpFile = join(dir, 'mcp.json'), settingsFile = join(dir, 'settings.json');

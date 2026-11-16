@@ -116,11 +116,21 @@ async function claudeLive() {
         while ((nl = buf.indexOf('\n')) >= 0) {
             const msg = JSON.parse(buf.slice(0, nl)); buf = buf.slice(nl + 1);
             if (msg.id === 1) rpc('notifications/initialized', {});
+            if (msg.id !== undefined && calls.has(msg.id)) { calls.get(msg.id)(msg); calls.delete(msg.id); }
             if (msg.method === 'notifications/claude/channel') {
                 const meta = Object.entries(msg.params.meta ?? {}).map(([k, v]) => ` ${k}="${v}"`).join('');
                 void turn(`<channel source="agora"${meta}>\n${msg.params.content}\n</channel>`, true);
             }
         }
+    });
+    // A tool call, as the real CLI makes one: through the MCP server (which carries the client name the bot token is bound to)
+    const calls = new Map();
+    let callId = 100;
+    const callTool = (name, toolArgs) => new Promise(res => {
+        const id = callId++;
+        calls.set(id, res);
+        rpc('tools/call', { name, arguments: toolArgs }, id);
+        setTimeout(() => res(null), 15000);
     });
     rpc('initialize', { protocolVersion: '2025-06-18', capabilities: { experimental: { 'claude/channel': {} } }, clientInfo: { name: 'claude-code', version: '2.1.311' } }, 1);
 
@@ -138,7 +148,10 @@ async function claudeLive() {
         await fire('PreToolUse', {});
         // A turn that works on the repository leaves a commit, as a real one would
         if (/\bcommit\b/.test(prompt)) { try { execFileSync('git', ['commit', '--allow-empty', '-q', '-m', 'fake live turn'], { stdio: 'ignore' }); } catch { /* no repo */ } }
-        if (pushed) await reply();
+        if (pushed) {
+            const channel = /channel_id="([^"]+)"/.exec(prompt)?.[1];
+            await callTool('chat_send', { channel, message: 'fake-claude reply' });
+        }
         await fire('Stop', {});
         process.stdout.write('\u2713 done\r\n');
     }

@@ -183,6 +183,8 @@ export function hookCli(client: string | null | undefined): HookCli | undefined 
  */
 export function startHookState(config: { instance: string; token: string; defaultChannel?: string }, client: () => string | null,
     env: NodeJS.ProcessEnv = process.env, root = hookStateDir()): (() => Promise<boolean>) | undefined {
+    // A hosted CLI (a wake, or an agent's live terminal in its box) has the hooks off: its token stays off the disk
+    if (env.AGORA_HOOKS?.trim().toLowerCase() === 'off') return undefined;
     const server = hookServerName(env);
     if (!server) return undefined;
     const write = async (): Promise<boolean> => {

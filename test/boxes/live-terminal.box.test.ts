@@ -57,8 +57,8 @@ async function watch() {
 const liveState = () => psql(`SELECT live_state FROM agent_sessions WHERE id = '${sessionId}'`);
 const logOf = async (file: string) => (await inBox(box.container, `cat ${STATE}/${file} 2>/dev/null || true`)).stdout;
 /** The box's live CLI processes: "uid cmdline" (the image has no pgrep; the bracket keeps grep from matching itself) */
-const liveProcs = async () => (await inBox(box.container,
-    `for p in /proc/[0-9]*; do if tr '\\0' ' ' < $p/cmdline 2>/dev/null | grep -q '[d]angerously-load-development-channels'; then echo "$(stat -c %u $p) \${p#/proc/}"; fi; done`)).stdout.trim().split('\n').filter(Boolean);
+const liveProcs = async (includeHelper = false) => (await inBox(box.container,
+    `for p in /proc/[0-9]*; do c=$(tr '\\0' ' ' < $p/cmdline 2>/dev/null); case "$c" in *[d]angerously-load-development-channels*) ${includeHelper ? '' : 'case "$c" in *agora-pty*) continue;; esac;'} echo "$(stat -c %u $p) \${p#/proc/}";; esac; done`)).stdout.trim().split('\n').filter(Boolean);
 const post = (content: string) => api(`/channels/${inst.channelId}/messages`, { method: 'POST', auth: inst.admin, body: { content } });
 const hubTurns = () => psql(`SELECT count(*) FROM live_terminal_turns WHERE session_id = '${sessionId}' AND ended_at IS NOT NULL`);
 
@@ -84,8 +84,8 @@ describe('a live terminal in a real box', () => {
         await until('the live session to be idle', async () => (await liveState()) === 'idle', 180_000, 1500);
         const procs = await liveProcs();
         expect(procs.length).toBeGreaterThan(0);
-        // Every process of the CLI is the agent's (uid 1000), none the operator's
-        expect(procs.every(p => p.startsWith('1000 '))).toBe(true);
+        // Every process of the CLI, and the pty helper that holds its terminal, is the agent's (uid 1000), none the operator's
+        expect((await liveProcs(true)).every(p => p.startsWith('1000 '))).toBe(true);
         const pid = procs[0].split(' ')[1];
         // ... on a pseudo-terminal
         expect((await inBox(box.container, `readlink /proc/${pid}/fd/0`)).stdout.trim()).toMatch(/^\/dev\/pts\/\d+$/);
@@ -151,6 +151,9 @@ describe('a live terminal in a real box', () => {
     }, 300_000);
 
     it('holds a chat message while the owner has the controls and delivers it when they stop', async () => {
+        // The earlier test's owner page is closed, so its keystrokes no longer count as the controls
+        for (const s of sockets.splice(0)) s.disconnect();
+        await new Promise(r => setTimeout(r, 1500));
         const a = await watch();
         a.socket.emit('live:take', { ack: true });
         await until('the confirmation', async () => a.events.includes('live:taken'), 10_000, 100);

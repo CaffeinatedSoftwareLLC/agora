@@ -1,8 +1,8 @@
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { configSchema, type Config } from '../src/config.js';
-import { LiveManager, channelMessageId, hookSettings, HOOK_EVENTS, type LiveSpec, type LiveTransport } from '../src/live-terminal.js';
+import { LiveManager, channelMessageId, hookSettings, trustFolder, HOOK_EVENTS, type LiveSpec, type LiveTransport } from '../src/live-terminal.js';
 import type { PtyChild, PtyOptions } from '../src/box-shell.js';
 import { tempDir } from './helpers.js';
 
@@ -48,7 +48,7 @@ function cfg(auth: 'subscription' | 'api_key' = 'subscription'): Config {
         botTokens: { [BOT]: 'bot_selected.secret' } });
 }
 const spec = (over: Partial<LiveSpec> = {}) => ({ sessionId: SID, channelId: CH, channelName: 'general', botId: BOT, conversation: CONV, profile: 'cc', cols: 120, rows: 32, ...over });
-const flush = async () => { await new Promise(r => setTimeout(r, 150)); };
+const flush = async () => { await new Promise(r => setTimeout(r, 600)); };
 
 function setup(over: { auth?: 'subscription' | 'api_key' } = {}) {
     const t = new FakeTransport(); const ptys: FakePty[] = []; const opts: PtyOptions[] = []; const logs: string[] = [];
@@ -318,4 +318,27 @@ describe('the pty', () => {
         ptys[0].data(Buffer.from('x'));
         expect(t.of('live:output')).toEqual([]);
     });
+});
+
+describe('the trust-folder question', () => {
+  it('is answered in the CLI configuration, merged into what is there, and never by typing', async () => {
+    const state = join(dir, 'trust-state');
+    await mkdir(state, { recursive: true });
+    await writeFile(join(state, '.claude.json'), JSON.stringify({ oauthAccount: { a: 1 }, projects: { '/other': { x: 1 } } }));
+    await trustFolder(state, '/home/agent/wt');
+    const after = JSON.parse(await readFile(join(state, '.claude.json'), 'utf8'));
+    expect(after).toEqual({ oauthAccount: { a: 1 }, projects: { '/other': { x: 1 }, '/home/agent/wt': { hasTrustDialogAccepted: true } } });
+  });
+  it('creates the file when there is none, and leaves a file it cannot read as an object alone', async () => {
+    const state = join(dir, 'trust-state-2');
+    await mkdir(state, { recursive: true });
+    await trustFolder(state, '/w');
+    expect(JSON.parse(await readFile(join(state, '.claude.json'), 'utf8'))).toEqual({ projects: { '/w': { hasTrustDialogAccepted: true } } });
+    await writeFile(join(state, '.claude.json'), 'not json');
+    await trustFolder(state, '/w');
+    expect(await readFile(join(state, '.claude.json'), 'utf8')).toBe('not json');
+    await writeFile(join(state, '.claude.json'), '[1]');
+    await trustFolder(state, '/w');
+    expect(await readFile(join(state, '.claude.json'), 'utf8')).toBe('[1]');
+  });
 });
