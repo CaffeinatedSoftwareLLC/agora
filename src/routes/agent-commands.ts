@@ -192,7 +192,7 @@ export async function announce(db: any, channelId: string, sessionId: string, te
     const posted = await postSessionNotice(db, channelId, threadId, text);
     notices.push(...posted);
     await db.query(
-        `INSERT INTO agent_inbox (id, session_id, message_id, thread_id, reason) VALUES ($1, $2, $3, $4, 'command')`,
+        `INSERT INTO agent_inbox (id, session_id, message_id, thread_id, reason, hello) VALUES ($1, $2, $3, $4, 'command', true)`,
         [generateUlid(), sessionId, posted[0].event.id, threadId]
     );
 }
@@ -316,6 +316,7 @@ export async function agentCommandRoutes(app: FastifyInstance) {
                     const profile = await profileByName(db, channelId, profileName);
                     const live = await liveFor(db, channelId, profile.bot_id.trim());
                     if (!live) throw new CommandError(404, { error: 'no_live_session' });
+                    if (live.live_mode && lurkMode !== null) throw new CommandError(409, { error: 'lurk_not_supported_live', message: 'A live-terminal agent does not lurk: its terminal is one interactive session that only hears what the server delivers as a message to it, and reading along would mean pushing every channel message into its context. Use a per-wake agent for lurking.' });
                     await db.query('UPDATE agent_sessions SET lurk_mode = $2 WHERE id = $1', [live.id, lurkMode]);
                     if (lurkMode === null) await db.query(`UPDATE agent_inbox SET acked_at = NOW()
                         WHERE session_id = $1 AND reason = 'lurk' AND batch_id IS NULL AND acked_at IS NULL`, [live.id]);
@@ -345,6 +346,9 @@ export async function agentCommandRoutes(app: FastifyInstance) {
                     ? endSessionById(db, channelId, sessionId, who, notices) : endSession(db, channelId, profileName, who, notices);
                 if (command === 'resume') return resumeSession(db, channelId, sessionId, onLive, actorId, who, notices, tokenBudget);
                 const started = await startSession(db, channelId, profileName, onLive, fresh, actorId, who, notices);
+                if (lurkMode !== undefined && lurkMode !== null && started.body.session.liveMode) {
+                    throw new CommandError(409, { error: 'lurk_not_supported_live', message: 'A live-terminal agent does not lurk: its terminal is one interactive session that only hears what the server delivers as a message to it, and reading along would mean pushing every channel message into its context. Use a per-wake agent for lurking.' });
+                }
                 if (lurkMode !== undefined) {
                     await db.query('UPDATE agent_sessions SET lurk_mode = $2 WHERE id = $1', [started.body.session.id, lurkMode]);
                     started.body.session.lurkMode = lurkMode;

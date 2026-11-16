@@ -55,8 +55,10 @@ CREATE TABLE live_terminal_turns (
 -- counts the wake when it sends the push (live_wake_counted), and replays what is not acknowledged.
 ALTER TABLE agent_inbox
     ADD COLUMN live_sent_at      TIMESTAMPTZ,
-    ADD COLUMN live_wake_counted BOOLEAN NOT NULL DEFAULT FALSE;
-CREATE INDEX idx_agent_inbox_live ON agent_inbox(session_id, id) WHERE acked_at IS NULL AND batch_id IS NULL;
+    ADD COLUMN live_wake_counted BOOLEAN NOT NULL DEFAULT FALSE,
+    -- The "started a session" notice a /start or /resume posts so the agent says hello: the one row a live session
+    -- acknowledges without pushing it (every other row, notices to the agent included, is delivered)
+    ADD COLUMN hello             BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE INDEX idx_live_turns_session ON live_terminal_turns(session_id, started_at DESC);
 CREATE UNIQUE INDEX idx_live_turns_open ON live_terminal_turns(session_id) WHERE ended_at IS NULL;

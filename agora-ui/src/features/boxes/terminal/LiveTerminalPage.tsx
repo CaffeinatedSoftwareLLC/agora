@@ -7,7 +7,7 @@ import type { Socket } from 'socket.io-client';
 import { api } from '../../../lib/api';
 import { createLiveSocket } from '../../../lib/socketFactory';
 import { Button } from '../../../components/ui/Button';
-import { GESTURE_EVENTS, GESTURE_WINDOW_MS, TOOLBAR_KEYS, binaryToBytes, inputChunks, plainHttpProblem } from './terminalRules';
+import { LIVE_GESTURE_EVENTS, GESTURE_WINDOW_MS, TOOLBAR_KEYS, binaryToBytes, inputChunks, isTerminalReport, plainHttpProblem } from './terminalRules';
 import { liveExitText, liveInfoError, liveNoteText, liveSocketError, liveStateLabel, type LiveInfo, type LiveState } from './liveRules';
 
 /**
@@ -102,7 +102,7 @@ export function LiveTerminalPage() {
     socketRef.current = socket;
     const markGesture = () => { gestureAt.current = Date.now(); };
     const box = container.current;
-    for (const ev of GESTURE_EVENTS) box.addEventListener(ev, markGesture, true);
+    for (const ev of LIVE_GESTURE_EVENTS) box.addEventListener(ev, markGesture, true);
     socket.on('live:ready', (m: { role: 'owner' | 'watcher'; state: LiveState; note: string | null; cols: number; rows: number; controlsBy: string | null; held: boolean }) => {
       setRole(m.role); setState(m.state); setNote(m.note);
       setControls({ by: m.controlsBy, held: m.held, reason: null });
@@ -129,12 +129,11 @@ export function LiveTerminalPage() {
       if (!typingRef.current || !socket.connected) return;
       if (Date.now() - gestureAt.current > GESTURE_WINDOW_MS) return;
       // Mouse and focus reports are modes the agent's screen can switch on: they are not passed on, only keys and pastes
-      // eslint-disable-next-line no-control-regex
-      if (typeof payload === 'string' && /^\[(?:M|<[\d;]+[Mm]|[IO]$)/.test(payload)) return;
+      if (typeof payload === 'string' && isTerminalReport(payload)) return;
       socket.emit('live:input', payload);
     };
     term.onData(d => { for (const piece of inputChunks(d)) forward(piece); });
-    term.onBinary(b => { const bytes = binaryToBytes(b); for (let i = 0; i < bytes.length; i += 16384) forward(bytes.slice(i, i + 16384)); });
+    term.onBinary(b => { if (isTerminalReport(b)) return; const bytes = binaryToBytes(b); for (let i = 0; i < bytes.length; i += 16384) forward(bytes.slice(i, i + 16384)); });
     const observer = new ResizeObserver(() => {
       if (!typingRef.current) return;
       try { fit.fit(); const { cols, rows } = term; if (socket.connected) socket.emit('live:resize', { cols, rows }); } catch { /* not laid out yet */ }
@@ -143,7 +142,7 @@ export function LiveTerminalPage() {
     socket.connect();
     return () => {
       finished = true;
-      for (const ev of GESTURE_EVENTS) box.removeEventListener(ev, markGesture, true);
+      for (const ev of LIVE_GESTURE_EVENTS) box.removeEventListener(ev, markGesture, true);
       observer.disconnect();
       socket.disconnect();
       socketRef.current = null; termRef.current = null; fitRef.current = null;

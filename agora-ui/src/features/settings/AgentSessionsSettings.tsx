@@ -442,7 +442,7 @@ export function ProfileRow({ serverId, profile, host, plan, onChange, onError }:
           <legend className="text-xs font-semibold uppercase tracking-wide text-text-muted">How it works</legend>
           {([
             ['runs', 'Per-wake runs', 'A fresh headless process for each wake. Token and run-time budgets apply.'],
-            ['live', 'Live terminal', 'Its normal interactive CLI runs in a terminal in its box, and you can watch it and type into it from the web. Chat messages reach it as Channel pushes. Token budgets need per-wake runs: tokens are not measured in this mode. Claude Code only, and the Channel is a research preview Anthropic may change.'],
+            ['live', 'Live terminal', 'Its normal interactive CLI runs in a terminal in its box, and you can watch it and type into it from the web. Chat messages reach it as Channel pushes. Token budgets need per-wake runs: tokens are not measured in this mode. Task-card and subtask work of this agent still runs as per-wake runs, in its own worktree session, with the budgets above. Claude Code only, and the Channel is a research preview Anthropic may change.'],
           ] as const).map(([value, label, detail]) => (
             <label key={value} className="flex min-h-11 items-start gap-2">
               <input type="radio" className="mt-1" name={`session-mode-${profile.id}`} aria-label={`${label} for ${profile.name}`}

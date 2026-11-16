@@ -446,6 +446,44 @@ async function claimSession(c: PoolClient, host: Host, sessionId: string, notice
     };
 }
 
+/**
+ * The same checks the per-wake claim runs on a batch (claimSession steps 1 and 4), for rows about to be pushed to a live-terminal
+ * session: the bot may still act in the channel, and each row still passes `recheckRows` with this session's terms (plan owner,
+ * started_by, owner-bot authority, strict author for handoffs and protocol, an open handoff offer). Rows that fail are acknowledged,
+ * and the same notice the claim posts goes out when a subscription session's starter is the blocker. Returns what may be pushed.
+ */
+export async function recheckLiveRows(c: PoolClient, sessionId: string, rowIds: string[], notices: Notice[]) {
+    const session = (await c.query(
+        `SELECT s.id, s.bot_id, s.channel_id, s.server_id, s.started_by, p.name AS profile_name, ${WAKE_AUTH_SQL} AS auth_mode,
+                ${PLAN_OWNER_SQL} AS plan_owner_id, (s.started_by IS NOT NULL AND s.started_by = ${PLAN_OWNER_SQL}) AS started_by_owner, srv.subscription_wakes
+         FROM agent_sessions s JOIN agent_profiles p ON p.id = s.profile_id JOIN servers srv ON srv.id = s.server_id
+         WHERE s.id = $1 AND s.state = 'live' AND s.live_mode FOR SHARE OF s`, [sessionId])).rows[0];
+    if (!session || rowIds.length === 0) return [];
+    const channelId = session.channel_id.trim();
+    const rows = (await c.query(`SELECT * FROM agent_inbox WHERE id = ANY($1) AND acked_at IS NULL ORDER BY id`, [rowIds])).rows;
+    if (!await botCanAct(c, session.bot_id.trim(), channelId)) {
+        await c.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE id = ANY($1)`, [rows.map((r: any) => r.id)]);
+        return [];
+    }
+    const subscription = session.auth_mode !== 'api_key';
+    const planOwnerId: string | null = session.plan_owner_id?.trim() ?? null;
+    const ownerBotsOn = subscriptionWakesOf(session.subscription_wakes) === 'owner_bots';
+    const kept = await recheckRows(c, channelId, rows, subscription
+        ? { startedByOwner: !!session.started_by_owner, planOwnerId, ownerBots: ownerBotsOn }
+        : null, ownerBotsOn);
+    const dropped = rows.filter((r: any) => !kept.some(k => k.row.id === r.id));
+    if (dropped.length > 0) await c.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE id = ANY($1)`, [dropped.map((r: any) => r.id)]);
+    if (kept.length === 0 && subscription && !session.started_by_owner && rows.some((r: any) => r.reason !== 'lurk')) {
+        const named = planOwnerId
+            ? (await c.query('SELECT id, username FROM users WHERE id = ANY($1)', [[planOwnerId, session.started_by?.trim() ?? planOwnerId]])).rows : [];
+        const nameOf = (id: string | null | undefined) => { const u = named.find((x: any) => x.id.trim() === id?.trim()); return u ? displayName(u.username) : null; };
+        notices.push(await postNotice(c, channelId, session.auth_mode === 'siwc' || !planOwnerId
+            ? planNotice(session.profile_name, session.auth_mode, !!planOwnerId)
+            : startedByNotice(session.profile_name, nameOf(planOwnerId) ?? 'the owner', nameOf(session.started_by))));
+    }
+    return kept;
+}
+
 /** Not paused, the bot and its owner active, and the bot still has access to the channel. */
 async function botCanAct(c: PoolClient, botId: string, channelId: string): Promise<boolean> {
     const row = await c.query(

@@ -34,7 +34,7 @@ const listening = !options.channelMode && options.presence ? new ListeningReport
 // terminal session; tool calls report working/idle to it. Hosted runs pass --no-presence.
 const activity = options.channelMode || options.presence ? new ActivityReporter() : undefined;
 registerTools(server, api, cursors, { defaultChannel: config.defaultChannel, uploadRoot: config.uploadRoot,
-    allowOutsideWorkdir: config.allowOutsideWorkdir, listening, activity });
+    allowOutsideWorkdir: config.allowOutsideWorkdir, listening, activity, liveSession: options.liveSession });
 registerResources(server, api);
 
 // Every request names the MCP client that launched us: Agora binds the bot token to that client

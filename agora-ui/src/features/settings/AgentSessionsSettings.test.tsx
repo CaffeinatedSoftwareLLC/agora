@@ -136,6 +136,7 @@ describe('How it works (live terminals, docs/planning/live-terminals.md)', () =>
     expect(screen.getByRole('radio', { name: 'Per-wake runs for claude' })).toBeChecked();
     expect(live).not.toBeChecked();
     expect(screen.getByTestId('session-mode-claude')).toHaveTextContent('Token budgets need per-wake runs');
+    expect(screen.getByTestId('session-mode-claude')).toHaveTextContent('Task-card and subtask work of this agent still runs as per-wake runs')
     fireEvent.click(live);
     await waitFor(() => expect(patch).toHaveBeenCalledWith('/servers/S/agent-profiles/P', { sessionMode: 'live' }));
   });

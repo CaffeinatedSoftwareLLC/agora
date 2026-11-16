@@ -213,3 +213,19 @@ it('keeps one visible warning while typing, and passes on no mouse or focus repo
   type(terms[0], '[A');
   expect(sent(s, 'live:input')).toEqual(['[A']);
 });
+
+it('a mouse click, a pointer or a touch is not typing: only keys, composition and paste open the gate, and a binary mouse report is dropped', async () => {
+  const s = await connect();
+  act(() => s.fire('live:taken'));
+  const box = screen.getByTestId('live-terminal-container');
+  for (const ev of ['mousedown', 'pointerdown', 'touchstart', 'wheel']) {
+    fireEvent(box, new Event(ev, { bubbles: true }));
+    terms[0].handlers.data('x');
+  }
+  expect(sent(s, 'live:input')).toEqual([]);
+  fireEvent.keyDown(box, { key: 'a' });
+  terms[0].handlers.binary('[M !!');
+  expect(sent(s, 'live:input')).toEqual([]);
+  terms[0].handlers.data('y');
+  expect(sent(s, 'live:input')).toEqual(['y']);
+});

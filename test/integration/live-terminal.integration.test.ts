@@ -121,12 +121,15 @@ async function watch(session: Session, sessionId: string) {
 }
 
 /** The bot's Claude Code Channel connection (agora-mcp --channel-mode): what the server delivers to it, and the acknowledgements it sends. */
-async function channelSocket() {
+async function channelSocket(sessionIds: string[] = [sessionId]) {
     const s = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(box), auth: { type: 'bot', token: box.botToken, mode: 'channel', client: 'claude-code' } });
     sockets.push(s);
     const deliveries: any[] = [];
     s.on('LiveDeliver', d => deliveries.push(d));
     await connected(s);
+    // agora-mcp of each live session says hello once it is up (src/lib/boxes/live-hub.ts liveChannelUp)
+    for (const id of sessionIds) s.emit('LiveHello', { sessionId: id });
+    await settle(60);
     return { s, deliveries };
 }
 async function postAs(who: { auth: object }, content: string): Promise<string> {
@@ -282,7 +285,13 @@ describe('the host connection', () => {
         expect(await refusal(second)).toBe('host_already_connected');
         const bad = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(box), auth: { type: 'live', token: `ah_${box.hostToken.slice(3, 29)}.wrong`, liveProtocol: 1 } });
         sockets.push(bad);
-        expect(await refusal(bad)).toBe('Invalid host token');
+        expect(await refusal(bad)).toBe('host_already_connected');
+        // (with no host connected, the secret is checked)
+        host.socket.disconnect();
+        await until(() => !liveHub()!.hostConnected(box.id));
+        const bad2 = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(box), auth: { type: 'live', token: `ah_${box.hostToken.slice(3, 29)}.wrong`, liveProtocol: 1 } });
+        sockets.push(bad2);
+        expect(await refusal(bad2)).toBe('Invalid host token');
     });
 
     test('ignores events about a session that is not this box\'s', async () => {
@@ -582,7 +591,7 @@ describe('delivery: the server routes, the Channel carries', () => {
         expect(started.status, JSON.stringify(started.body)).toBe(201);
         const secondSession = started.body.session.id as string;
         await until(() => host.desired.some(d => d.sessions.length === 2));
-        const ch = await channelSocket();
+        const ch = await channelSocket([sessionId, secondSession]);
         const a = await postAs(owner, '@alpha in the first');
         const b = (await api.post(`/channels/${second}/messages`).set(owner.auth).send({ content: '@alpha in the second' })).body.id.trim();
         await until(() => ch.deliveries.length === 2);
@@ -712,15 +721,26 @@ describe('state, turns and limits', () => {
         expect(again.desired[0].sessions[0].sessionId).toBe(sessionId);
     });
 
-    test('a turn past the run-time limit is stopped step by step when the CLI ignores Escape: Escape, Escape, Ctrl-C, restart, one notice each', async () => {
+    test('the run-time clock starts at the server own push, is not reset by the agent turn start, and escalates: Escape, Escape, Ctrl-C, restart, one notice each', async () => {
         await api.patch(`/servers/${serverId}/agent-profiles/${box.profileId}`).set(owner.auth).send({ runTimeoutSec: 1 });
         await liveHub()!.sweep();
-        hostSays('live:turn', { phase: 'start', messageId: null, branch: 'b', sha: SHA1 });
-        await until(async () => (await rows(`SELECT 1 FROM live_terminal_turns`)).length === 1);
-        // The agent never reports an end: the steps come from the server's clock alone
+        const ch = await channelSocket();
         const steps: number[] = [];
         host.socket.on('live:interrupt', m => steps.push(m.step));
-        for (let i = 0; i < 40 && steps.length < 4; i++) { await settle(300); await liveHub()!.sweep(); }
+        // An agent-reported start with no delivery behind it (a typed turn) has no clock at all
+        hostSays('live:turn', { phase: 'start', messageId: null, branch: 'b', sha: SHA1 });
+        await settle(1500);
+        await liveHub()!.sweep();
+        expect(steps).toEqual([]);
+        hostSays('live:turn', { phase: 'end', signal: 'stop_hook', branch: 'b', sha: SHA2 });
+        // A delivery starts it; the agent's own start event does not move it
+        const id = await postAs(owner, '@alpha work');
+        await until(() => ch.deliveries.length === 1);
+        for (let i = 0; i < 40 && steps.length < 4; i++) {
+            await settle(300);
+            hostSays('live:turn', { phase: 'start', messageId: id, branch: 'b', sha: SHA1 });
+            await liveHub()!.sweep();
+        }
         expect(steps).toEqual([1, 2, 3, 4]);
         await liveHub()!.sweep();
         await liveHub()!.sweep();
@@ -731,6 +751,41 @@ describe('state, turns and limits', () => {
         expect(texts[1]).toMatch(/again \(Escape\)/);
         expect(texts[2]).toMatch(/Ctrl-C/);
         expect(texts[3]).toMatch(/stopped and started again/);
+    });
+
+    test('the agent reported end of the turn stops the clock', async () => {
+        await api.patch(`/servers/${serverId}/agent-profiles/${box.profileId}`).set(owner.auth).send({ runTimeoutSec: 1 });
+        await liveHub()!.sweep();
+        const ch = await channelSocket();
+        const steps: number[] = [];
+        host.socket.on('live:interrupt', m => steps.push(m.step));
+        const id = await postAs(owner, '@alpha quick');
+        await until(() => ch.deliveries.length === 1);
+        hostSays('live:turn', { phase: 'start', messageId: id, branch: 'b', sha: SHA1 });
+        hostSays('live:turn', { phase: 'end', signal: 'stop_hook', branch: 'b', sha: SHA2 });
+        await settle(1600);
+        await liveHub()!.sweep();
+        expect(steps).toEqual([]);
+    });
+
+    test('replacing the host mid-turn ends its turns and its clock: nothing is interrupted on the new host for a turn that predates it', async () => {
+        await api.patch(`/servers/${serverId}/agent-profiles/${box.profileId}`).set(owner.auth).send({ runTimeoutSec: 1 });
+        await liveHub()!.sweep();
+        const ch = await channelSocket();
+        const id = await postAs(owner, '@alpha long job');
+        await until(() => ch.deliveries.length === 1);
+        hostSays('live:turn', { phase: 'start', messageId: id, branch: 'b', sha: SHA1 });
+        await until(async () => (await rows(`SELECT 1 FROM live_terminal_turns WHERE ended_at IS NULL`)).length === 1);
+        host.socket.disconnect();
+        await until(async () => (await rows(`SELECT 1 FROM live_terminal_turns WHERE ended_at IS NULL`)).length === 0);
+        const fresh = await connectHost(box);
+        await until(() => fresh.desired.some(d => d.sessions.length > 0));
+        const seen: number[] = [];
+        fresh.socket.on('live:interrupt', m => seen.push(m.step));
+        await settle(1600);
+        for (let i = 0; i < 4; i++) { await liveHub()!.sweep(); await settle(100); }
+        expect(seen).toEqual([]);
+        expect((await rows(`SELECT end_signal FROM live_terminal_turns`))[0].end_signal).toBe('host_lost');
     });
 
     test('a running terminal with no Channel connection is reported, in the state and in the channel, never typed around', async () => {
@@ -893,6 +948,136 @@ describe('starting and the mode switch', () => {
         await end();
         await api.patch(`/servers/${serverId}/agent-profiles/${box.profileId}`).set(owner.auth).send({ sessionMode: 'runs' });
         expect((await api.get('/agent-hosts/@me/live').set(hostAuth)).body).toEqual({ enabled: false });
+    });
+});
+
+describe('delivery-time rechecks: what the per-wake claim checks, now, before anything is pushed', () => {
+    // The Channel is down while these wait (no LiveHello yet), so the rows sit behind the connection, as behind a hold
+    const ownerBot = async () => {
+        const invite = await api.post(`/servers/${serverId}/agent-invites`).set(owner.auth).send({ username: 'LeadBot' });
+        const redeemed = await api.post('/agent-invites/redeem').send({ code: invite.body.code });
+        expect([201, 409]).toContain((await api.post(`/channels/${channelId}/bots/${redeemed.body.botId}`).set(owner.auth)).status);
+        const term = io(base, { transports: ['websocket'], reconnection: false, autoConnect: false, auth: { type: 'bot', token: redeemed.body.token, mode: 'mcp' } });
+        sockets.push(term);
+        await connected(term);
+        await until(async () => (await rows(`SELECT 1 FROM agent_sessions WHERE kind = 'terminal' AND state = 'live' AND bot_id = $1`, [redeemed.body.botId])).length > 0);
+        return { auth: { Authorization: `Bot ${redeemed.body.token}` }, botId: redeemed.body.botId as string, token: redeemed.body.token as string };
+    };
+    const directRows = () => rows(`SELECT 1 FROM agent_inbox WHERE session_id = $1 AND reason = 'direct'`, [sessionId]);
+
+    test('the server switched to "Only you" while the owner bot message waited: dropped, acknowledged, not pushed', async () => {
+        const lead = await ownerBot();
+        const sent = await api.post(`/channels/${channelId}/messages`).set(lead.auth).send({ content: '@alpha review please' });
+        expect(sent.status, JSON.stringify(sent.body)).toBe(201);
+        await until(async () => (await directRows()).length === 1);
+        await ctx.db.query(`UPDATE servers SET subscription_wakes = 'owner_only' WHERE id = $1`, [serverId]);
+        const ch = await channelSocket();
+        await settle(800);
+        expect(ch.deliveries).toEqual([]);
+        expect(await wakes()).toBe(0);
+        expect(await rows(`SELECT 1 FROM agent_inbox WHERE session_id = $1 AND reason = 'direct' AND acked_at IS NULL`, [sessionId])).toHaveLength(0);
+    });
+
+    test('the owner bot token was revoked while the message waited: dropped', async () => {
+        const lead = await ownerBot();
+        await api.post(`/channels/${channelId}/messages`).set(lead.auth).send({ content: '@alpha review please' });
+        await until(async () => (await directRows()).length === 1);
+        await ctx.db.query(`UPDATE bot_tokens SET revoked_at = NOW() WHERE bot_id = $1`, [lead.botId]);
+        const ch = await channelSocket();
+        await settle(800);
+        expect(ch.deliveries).toEqual([]);
+        expect(await wakes()).toBe(0);
+    });
+
+    test('someone else became the session starter while the owner message waited: dropped, and the claim path notice is posted', async () => {
+        await postAs(owner, '@alpha please');
+        await until(async () => (await directRows()).length === 1);
+        await ctx.db.query(`UPDATE agent_sessions SET started_by = $2 WHERE id = $1`, [sessionId, director.userId]);
+        const ch = await channelSocket();
+        await settle(800);
+        expect(ch.deliveries).toEqual([]);
+        expect(await wakes()).toBe(0);
+        await until(async () => (await rows(`SELECT 1 FROM messages WHERE channel_id = $1 AND system_event = 'agent_session' AND content LIKE '%started%'`, [channelId])).length > 1);
+    });
+
+    test('the bot lost its access to the channel while the message waited: dropped', async () => {
+        await postAs(owner, '@alpha please');
+        await until(async () => (await directRows()).length === 1);
+        await ctx.db.query(`DELETE FROM bot_channel_access WHERE bot_id = $1 AND channel_id = $2`, [botOf(), channelId]);
+        const ch = await channelSocket();
+        await settle(800);
+        expect(ch.deliveries).toEqual([]);
+    });
+
+    test('a notice written for the agent (a tool approval retry) is delivered as a server notice; the /start hello is not', async () => {
+        const ch = await channelSocket();
+        const note = ulid();
+        await ctx.db.query(`INSERT INTO messages (id, channel_id, author_id, content, system_event) VALUES ($1, $2, NULL, 'Approved: retry the step.', 'agent_session')`, [note, channelId]);
+        await ctx.db.query(`INSERT INTO agent_inbox (id, session_id, message_id, reason) VALUES ($1, $2, $3, 'command')`, [ulid(), sessionId, note]);
+        await until(() => ch.deliveries.length === 1);
+        expect(ch.deliveries[0]).toMatchObject({ authority: 'system', reason: 'command' });
+        expect(ch.deliveries[0].message.content).toBe('Approved: retry the step.');
+        expect(await rows(`SELECT 1 FROM agent_inbox WHERE session_id = $1 AND hello AND acked_at IS NOT NULL`, [sessionId])).toHaveLength(1);
+        expect(ch.deliveries.every(d => !/session \(/.test(d.message.content))).toBe(true);
+    });
+
+    test('a live agent does not lurk: refused with the reason, at /start and later', async () => {
+        const later = await api.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'lurk', profile: 'alpha', lurkMode: 'balanced' });
+        expect(later.status).toBe(409);
+        expect(later.body.error).toBe('lurk_not_supported_live');
+        const off = await api.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'lurk', profile: 'alpha', lurkMode: null });
+        expect(off.status).toBe(200);
+        await api.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'end', profile: 'alpha' });
+        const start = await api.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'start', profile: 'alpha', fresh: true, lurkMode: 'quiet' });
+        expect(start.status).toBe(409);
+        expect(start.body.error).toBe('lurk_not_supported_live');
+        expect(await rows(`SELECT 1 FROM agent_sessions WHERE profile_id = $1 AND state = 'live'`, [box.profileId])).toHaveLength(0);
+    });
+});
+
+describe('the live CLI presence, and a flip of the mode', () => {
+    test('its presence in a channel where it has no live session does not silence the "nothing woke it" notice', async () => {
+        const two = await api.post(`/servers/${serverId}/channels`).set(owner.auth).send({ name: 'nolive', channelType: 3 });
+        expect(two.status).toBe(201);
+        expect((await api.post(`/channels/${two.body.id}/bots/${botOf()}`).set(owner.auth)).status).toBe(201);
+        await channelSocket();
+        await until(async () => (await rows(`SELECT 1 FROM agent_sessions WHERE kind = 'terminal' AND channel_id = $1 AND state = 'live'`, [two.body.id])).length === 1);
+        const m = await api.post(`/channels/${two.body.id}/messages`).set(owner.auth).send({ content: '@alpha are you there' });
+        expect(m.status).toBe(201);
+        await until(async () => (await rows(`SELECT 1 FROM messages WHERE channel_id = $1 AND system_event = 'agent_session' AND content LIKE '%no live session here%'`, [two.body.id])).length === 1);
+    });
+
+    test('flipping the mode finishes with what was pushed: a per-wake claim never takes it again', async () => {
+        const ch = await channelSocket();
+        const id = await postAs(owner, '@alpha pushed');
+        await until(() => ch.deliveries.length === 1);
+        await api.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'end', profile: 'alpha' });
+        await api.patch(`/servers/${serverId}/agent-profiles/${box.profileId}`).set(owner.auth).send({ sessionMode: 'runs' });
+        expect((await rows(`SELECT acked_at IS NOT NULL AS acked FROM agent_inbox WHERE message_id = $1`, [id]))[0].acked).toBe(true);
+    });
+});
+
+describe('the hub itself', () => {
+    test('it fails loudly when the database lacks the columns migration 104 now has', async () => {
+        const broken = new LiveHub({ query: async () => { throw new Error('column "hello" does not exist'); } } as any, () => {}, { emitToBot() {} });
+        await expect(broken.start()).rejects.toThrow(/recreate this development database/);
+    });
+
+    test('a host dropped for flooding does not get its budget back by reconnecting', async () => {
+        for (let i = 0; i < 200; i++) hostSays('live:state', { state: i % 2 ? 'idle' : 'working', note: null });
+        await until(() => !host.socket.connected);
+        await settle(150);
+        const again = await connectHost(box);
+        await until(() => again.desired.length > 0);
+        const before = liveHub()!.hostFloods;
+        for (let i = 0; i < 60; i++) again.socket.emit('live:state', { sessionId, state: i % 2 ? 'idle' : 'working', note: null });
+        await until(() => liveHub()!.hostFloods > before);
+    });
+
+    test('a second socket for a box that has its host is refused before any secret is checked', async () => {
+        const second = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false, extraHeaders: edgeFor(box), auth: { type: 'live', token: `ah_${box.hostToken.slice(3, 29)}.wrong`, liveProtocol: 1 } });
+        sockets.push(second);
+        expect(await refusal(second)).toBe('host_already_connected');
     });
 });
 

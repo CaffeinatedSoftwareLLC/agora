@@ -79,7 +79,7 @@ export function gateMessage(m: ChannelMessage, ctx: { selfId: string; auth: Auth
  * The event params. `meta` keys must be identifiers (letters, digits, underscores) or
  * Claude Code drops them; values are kept on one line.
  */
-export function formatChannelEvent(m: ChannelMessage, channelName: string | undefined, authority: 'owner' | 'director'): { content: string; meta: Record<string, string> } {
+export function formatChannelEvent(m: ChannelMessage, channelName: string | undefined, authority: 'owner' | 'director' | 'system', extra: Record<string, string> = {}): { content: string; meta: Record<string, string> } {
     const meta: Record<string, string> = {
         channel: oneLine(channelName ?? m.channelId),
         channel_id: m.channelId.trim(),
@@ -90,6 +90,7 @@ export function formatChannelEvent(m: ChannelMessage, channelName: string | unde
         ts: m.createdAt,
     };
     if (m.authorBot) meta.author_bot = 'true';
+    for (const [k, v] of Object.entries(extra)) if (/^[A-Za-z0-9_]+$/.test(k)) meta[k] = oneLine(v);
     if (m.threadId) meta.thread_id = m.threadId.trim();
     if (m.artifact) meta.artifact_id = m.artifact.id.trim();
     const canvas = m.artifact ? `\n[canvas: "${oneLine(m.artifact.title)}" v${m.artifact.version} (${m.artifact.kind}), artifact ${m.artifact.id}; read it with canvas_read]` : '';
@@ -141,6 +142,7 @@ const ID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 /** A delivery the server marked for one live-terminal session (src/lib/boxes/live-hub.ts dispatch). */
 export interface LiveDelivery {
     sessionId?: string; channelId?: string; channelName?: string; authority?: string;
+    ownerBot?: boolean; ownerBotDirect?: boolean; reason?: string;
     message?: { id?: string; content?: string; channelId?: string; authorId?: string | null; authorUsername?: string; authorBot?: boolean; threadId?: string | null; createdAt?: string };
 }
 
@@ -175,6 +177,8 @@ export class AgoraChannel {
         socket.on('connect_error', (err: Error) => this.log(`socket: ${err?.message ?? err}`));
         // Live terminal mode (docs/planning/live-terminals.md): the server routes, this only carries. It pushes exactly what the
         // server marks for THIS session and nothing else, and says when it has pushed it.
+        // Said once per connection: this session's Channel is up, so the server sends what it was holding for it
+        socket.on('connect', () => { if (this.deps.liveSession) socket.emit('LiveHello', { sessionId: this.deps.liveSession }); });
         socket.on('LiveDeliver', (d: LiveDelivery) => {
             void this.onLiveDeliver(d, ack => socket.emit('LiveAck', ack)).catch(e => this.log(`live delivery failed: ${e}`));
         });
@@ -190,12 +194,15 @@ export class AgoraChannel {
         if (!session || d?.sessionId !== session || typeof d.channelId !== 'string' || !ID.test(d.channelId)) return false;
         const m = d.message;
         if (!m || typeof m.id !== 'string' || !ID.test(m.id) || typeof m.content !== 'string' || !m.content.trim() || m.channelId?.trim() !== d.channelId.trim()) return false;
-        if (d.authority !== 'owner' && d.authority !== 'director') return false;
+        if (d.authority !== 'owner' && d.authority !== 'director' && d.authority !== 'system') return false;
         const id = m.id.trim();
         if (!this.seen.has(id)) {
             this.channelNames.set(d.channelId.trim(), typeof d.channelName === 'string' ? d.channelName : d.channelId);
             this.lastChannelId = d.channelId.trim();
-            await this.deps.notify({ method: CHANNEL_NOTIFICATION, params: formatChannelEvent({ ...m, authorAuthority: d.authority } as unknown as ChannelMessage, this.channelNames.get(d.channelId.trim()), d.authority) });
+            await this.deps.notify({ method: CHANNEL_NOTIFICATION, params: formatChannelEvent({ ...m, authorAuthority: d.authority } as unknown as ChannelMessage, this.channelNames.get(d.channelId.trim()), d.authority, {
+                // The owner's own bot is marked the way the per-wake prompt marks it ([OWNER'S BOT]); a server notice says what kind it is
+                ...(d.ownerBotDirect ? { owner_bot: 'true' } : {}), ...(d.authority === 'system' && typeof d.reason === 'string' ? { kind: d.reason } : {}),
+            }) });
             this.remember(id);
         }
         ack({ sessionId: session, messageId: id });

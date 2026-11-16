@@ -8,9 +8,9 @@ When a limit stops an agent, the notice names the limit, shows the used and limi
 
 | Limit | What it does when set | Where | Default |
 |---|---|---|---|
-| **Wakes per session** | Shelves a session after this many wakes. A wake is one run the agent starts to handle new messages. | Settings → Agents → the agent → Limits | No limit |
+| **Wakes per session** | Shelves a session after this many wakes. A wake is one run the agent starts to handle new messages (in live terminal mode, one message Agora pushes to it). | Settings → Agents → the agent → Limits | No limit |
 | **Tokens per session** | Shelves a session once it and its subtasks have used this many tokens. Claude counts cached context, so long runs use millions. | Settings → Agents → the agent → Limits | No limit |
-| **Time per run** | Stops a single run after this many minutes. The work it was doing is dropped, not retried. | Settings → Agents → the agent → Limits | No limit |
+| **Time per run** | Stops a single run after this many minutes. (For an agent in live terminal mode it is a per-turn safety net: the clock starts when Agora pushes a message to it, and the stop is Escape, Escape, Ctrl-C, then a restart of its CLI. It stops a stuck or looping agent, not a hostile one: see [planning/live-terminals.md](planning/live-terminals.md), decision 11.) The work it was doing is dropped, not retried. | Settings → Agents → the agent → Limits | No limit |
 | **Channel loop guard** | Stops bots after this many top-level bot messages in a row in a channel, until a person posts or presses Continue. | Settings → Agents → For all agents → Loop Guard | Off |
 | **Thread loop guard** | The same, counted per thread: bot replies in a row inside one thread. | Settings → Agents → For all agents → Loop Guard | Off |
 

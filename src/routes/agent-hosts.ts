@@ -427,6 +427,12 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     );
                 }
                 // A shelved session picks up the new mode when it is resumed
+                if (b.sessionMode !== undefined && b.sessionMode !== (p.session_mode ?? 'runs')) {
+                    // What was already pushed to a live session is finished with: a per-wake claim must never take a pushed message again
+                    await db.query(
+                        `UPDATE agent_inbox SET acked_at = NOW() WHERE acked_at IS NULL AND batch_id IS NULL AND live_sent_at IS NOT NULL
+                         AND session_id IN (SELECT id FROM agent_sessions WHERE profile_id = $1)`, [profileId]);
+                }
                 if (b.sessionMode !== undefined) {
                     await db.query(`UPDATE agent_sessions SET live_mode = $2 WHERE profile_id = $1 AND state <> 'ended' AND kind = 'hosted' AND thread_id IS NULL`, [profileId, b.sessionMode === 'live']);
                 }

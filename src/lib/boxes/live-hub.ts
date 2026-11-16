@@ -5,7 +5,7 @@ import { isTokenBlacklisted } from '../../auth/token-blacklist';
 import { verifyBotSecret } from '../../auth/bot-tokens';
 import { originAllowed, originSchemeMatches, sessionTokenFromHeaders } from '../../auth/session-cookie';
 import { generateUlid } from '../../utils/ulid';
-import { postNotice, type Notice } from '../agent-runs';
+import { postNotice, recheckLiveRows, type Notice } from '../agent-runs';
 import { limitOf } from '../agent-budget-notice';
 import { stampAuthority } from '../direct-agents';
 import { socketAccountError } from '../gateway-access';
@@ -140,8 +140,14 @@ interface Sess {
     /** Over the output rate since (ms), while the host keeps ignoring `live:pace` */
     overSince: number | null;
     /** The open turn, if any; turn events of a session run one after another */
-    turn: { startedMs: number; step: number } | null;
+    turn: { startedMs: number } | null;
     turnChain: Promise<unknown>;
+    /**
+     * The run-time clock: started by the SERVER's own push of a delivery to this session (not by anything the agent reports), restarted by
+     * the next delivery, ended by the agent's reported end of the turn. `step` is how far the stop has escalated.
+     */
+    run: { startedMs: number; step: number } | null;
+    persisting: boolean; persistDirty: boolean;
     wakeLimit: number | null; turnLimitSec: number | null;
     channelNoticeSent: boolean;
     persisted: string;
@@ -154,12 +160,15 @@ type Emit = (notices: Notice[]) => void;
 export interface LiveDeps {
     /** Send an event to every socket of a bot (its `user:<id>` room) */
     emitToBot(botId: string, event: string, payload: unknown): void;
-    /** Does the bot hold a Claude Code Channel connection (agora-mcp --channel-mode) right now? */
-    botChannelConnected(botId: string): boolean;
+    /** (Unused: whether a session's Channel is connected is per session now, from `LiveHello`.) */
+    botChannelConnected?(botId: string): boolean;
 }
 
 const isBytes = (d: unknown): d is Buffer | Uint8Array => d instanceof Uint8Array;
 const dims = (v: unknown, max: number) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= max ? v as number : null;
+
+/** One bucket per host id, kept across reconnects: dropping a host and letting it come back does not refill its budget. */
+const hostBuckets = new Map<string, Bucket>();
 
 export class LiveHub {
     private hosts = new Map<string, HostEntry>();
@@ -180,6 +189,11 @@ export class LiveHub {
     constructor(private db: Pool, private emit: Emit, private deps: LiveDeps) {}
 
     async start(): Promise<void> {
+        // Migration 104 was changed in place before release: a development database made from an earlier version must be recreated.
+        // Say so loudly rather than deliver nothing.
+        await this.db.query('SELECT live_sent_at, live_wake_counted, hello FROM agent_inbox LIMIT 0')
+            .then(() => this.db.query('SELECT agent_reported_clean FROM live_terminal_turns LIMIT 0'))
+            .catch(err => { throw new Error(`live terminals: the database lacks migration 104 as it is now (${(err as Error).message}); recreate this development database`); });
         // A server that stopped mid-turn left open rows behind: nothing is running them now
         await this.db.query(`UPDATE live_terminal_turns SET ended_at = NOW(), end_signal = 'host_lost', unverified_reason = 'server_restarted' WHERE ended_at IS NULL`).catch(() => {});
         this.timer = setInterval(() => { void this.sweep().catch(() => {}); }, syncMs());
@@ -232,6 +246,28 @@ export class LiveHub {
         for (const s of this.sessions.values()) for (const v of s.viewers.values()) if (v.info.userId === userId) n++;
         return n;
     }
+    /** Is this session's own Channel (its agora-mcp, which said `LiveHello`) connected right now? */
+    sessionChannelConnected(sessionId: string): boolean { return (this.channelUp.get(sessionId)?.size ?? 0) > 0; }
+    private channelUp = new Map<string, Set<string>>();
+    private lastReplay = new Map<string, number>();
+    /** agora-mcp of a live session connected (`LiveHello`): what was not acknowledged is sent again, in order. */
+    liveChannelUp(botId: string, sessionId: unknown, socketId: string): void {
+        if (typeof sessionId !== 'string') return;
+        const s = this.sessions.get(sessionId);
+        if (!s || s.botId !== botId) return;
+        const set = this.channelUp.get(sessionId) ?? new Set<string>();
+        set.add(socketId);
+        this.channelUp.set(sessionId, set);
+        const now = Date.now();
+        if (now - (this.lastReplay.get(sessionId) ?? 0) < 2_000) return;
+        this.lastReplay.set(sessionId, now);
+        void this.track(this.db.query(`UPDATE agent_inbox SET live_sent_at = NULL WHERE session_id = $1 AND acked_at IS NULL AND batch_id IS NULL`, [sessionId])
+            .then(() => this.dispatch())).catch(() => {});
+    }
+    liveChannelDown(socketId: string): void {
+        for (const [id, set] of this.channelUp) { set.delete(socketId); if (set.size === 0) this.channelUp.delete(id); }
+    }
+
     /** Does the hub hold a live socket for this box? (for the host's own check-in, and for tests) */
     hostCount(): number { return this.hosts.size; }
 
@@ -290,7 +326,7 @@ export class LiveHub {
                 sessionId: w.sessionId, boxId: host.boxId, serverId: host.serverId, channelId: w.channelId, botId: w.botId, ownerId: w.ownerId,
                 profile: w.profile, channelName: w.channelName, state: 'starting', note: null, stateAtMs: Date.now(), startedAtMs: Date.now(),
                 ring: new Ring(), cols: DEFAULT_COLS, rows: DEFAULT_ROWS, viewers: new Map(), lastOwnerInputMs: 0, controlsBy: null, held: false, limitHeld: false,
-                outMeter: new ByteMeter(LIVE_RATE_BYTES, LIVE_RATE_BYTES, 0), bytesOut: 0, bytesIn: 0, overSince: null, turn: null, turnChain: Promise.resolve(),
+                outMeter: new ByteMeter(LIVE_RATE_BYTES, LIVE_RATE_BYTES, 0), bytesOut: 0, bytesIn: 0, overSince: null, turn: null, turnChain: Promise.resolve(), run: null, persisting: false, persistDirty: false,
                 wakeLimit: w.wakeLimit, turnLimitSec: w.turnLimitSec, channelNoticeSent: false, persisted: '', lastRedrawMs: 0, noticeAt: new Map(),
             };
             this.sessions.set(w.sessionId, s);
@@ -300,7 +336,11 @@ export class LiveHub {
         }
         s.wakeLimit = w.wakeLimit; s.turnLimitSec = w.turnLimitSec;
         const limited = s.wakeLimit !== null && w.wakesUsed >= s.wakeLimit;
-        if (limited !== s.limitHeld) { s.limitHeld = limited; this.applyHold(s); }
+        if (limited !== s.limitHeld) {
+            s.limitHeld = limited;
+            this.applyHold(s);
+            if (limited) void this.track(this.sayOnce(s, 'wake_limit', `**${s.profile}** has used its wake limit (${w.wakesUsed} of ${w.wakeLimit}). Further messages are held, not delivered, until the limit is lifted in Settings → Agents.`)).catch(() => {});
+        }
         return s;
     }
 
@@ -313,8 +353,13 @@ export class LiveHub {
             socket.disconnect(true);
             return false;
         }
-        if (old && old.socket !== socket) old.socket.disconnect(true);
-        const entry: HostEntry = { socket, info, allowed: new Set<string>(), sent: '', bucket: new Bucket(eventRate(), eventBurst()), dbInFlight: 0 };
+        // A host being replaced (a rebuilt box, a connection that died): everything of it ends first, so nothing of the old host's turns
+        // or clock survives into the new one's
+        if (old && old.socket !== socket) { this.dropHost(old, 'replaced'); old.socket.disconnect(true); }
+        for (const s of this.sessions.values()) if (s.boxId === info.boxId) this.endHostWork(s);
+        let bucket = hostBuckets.get(info.hostId);
+        if (!bucket) { bucket = new Bucket(eventRate(), eventBurst()); hostBuckets.set(info.hostId, bucket); }
+        const entry: HostEntry = { socket, info, allowed: new Set<string>(), sent: '', bucket, dbInFlight: 0 };
         this.hosts.set(info.boxId, entry);
         const mine = (id: unknown): Sess | null => {
             if (typeof id !== 'string' || !entry.allowed.has(id)) return null;
@@ -369,17 +414,27 @@ export class LiveHub {
             dbWork(() => this.turnOp(s, () => this.endTurn(s, 'session_ended', null, null)));
             this.setState(s, 'restarting', 'exited');
         }));
-        socket.on('disconnect', () => {
-            if (this.hosts.get(info.boxId) !== entry) return;
-            this.hosts.delete(info.boxId);
-            for (const s of this.sessions.values()) {
-                if (s.boxId !== info.boxId) continue;
-                void this.track(this.turnOp(s, () => this.endTurn(s, 'host_lost', null, null))).catch(() => {});
-                this.setState(s, 'stopped', 'box_disconnected');
-            }
-        });
+        // (a replaced host was dropped when it was replaced: its late disconnect touches nothing of the new one)
+        socket.on('disconnect', () => { if (this.hosts.get(info.boxId) === entry) this.dropHost(entry, 'disconnected'); });
         void this.track(this.syncBox(info.boxId)).catch(() => {});
         return true;
+    }
+
+    /** Open turns and the run-time clock of a session belong to the host that reported them: they end with it. */
+    private endHostWork(s: Sess): void {
+        s.turn = null;
+        s.run = null;
+        void this.track(this.turnOp(s, () => this.closeTurns(s.sessionId, 'host_lost'))).catch(() => {});
+    }
+
+    /** The one way a host ends: a disconnect, a replacement, a failed check. */
+    private dropHost(entry: HostEntry, _reason: string): void {
+        if (this.hosts.get(entry.info.boxId) === entry) this.hosts.delete(entry.info.boxId);
+        for (const s of this.sessions.values()) {
+            if (s.boxId !== entry.info.boxId) continue;
+            this.endHostWork(s);
+            this.setState(s, 'stopped', 'box_disconnected');
+        }
     }
 
     private onOutput(s: Sess, data: Buffer, host: HostEntry): void {
@@ -413,11 +468,19 @@ export class LiveHub {
         }
     }
 
+    /** Writes the latest state; writes that arrive meanwhile are coalesced into one more. */
     private async persist(s: Sess): Promise<void> {
-        const key = `${s.state}/${s.note}`;
-        if (key === s.persisted) return;
-        s.persisted = key;
-        await this.db.query(`UPDATE agent_sessions SET live_state = $2, live_note = $3, live_state_at = NOW() WHERE id = $1 AND live_mode`, [s.sessionId, s.state, s.note]);
+        if (s.persisting) { s.persistDirty = true; return; }
+        s.persisting = true;
+        try {
+            do {
+                s.persistDirty = false;
+                const key = `${s.state}/${s.note}`;
+                if (key === s.persisted) continue;
+                s.persisted = key;
+                await this.db.query(`UPDATE agent_sessions SET live_state = $2, live_note = $3, live_state_at = NOW() WHERE id = $1 AND live_mode`, [s.sessionId, s.state, s.note]);
+            } while (s.persistDirty);
+        } finally { s.persisting = false; }
     }
 
     private controlsActive(s: Sess, now = Date.now()): boolean {
@@ -443,17 +506,6 @@ export class LiveHub {
 
     // ─── Delivery: the server routes, the Channel carries ───
 
-    /**
-     * A bot's channel connection came up (a CLI restart, the end of a startup dialog, a box restart): every
-     * message not yet acknowledged is sent again, in order.
-     */
-    botConnected(botId: string): void {
-        void this.track(this.db.query(
-            `UPDATE agent_inbox i SET live_sent_at = NULL
-             FROM agent_sessions s WHERE s.id = i.session_id AND s.bot_id = $1 AND s.live_mode AND i.acked_at IS NULL AND i.batch_id IS NULL`, [botId])
-            .then(() => this.dispatch())).catch(() => {});
-    }
-
     /** agora-mcp says it pushed a message into its CLI. Only the bot's own session can acknowledge, and only what was sent. */
     async ack(botId: string, sessionId: unknown, messageId: unknown): Promise<boolean> {
         if (typeof sessionId !== 'string' || typeof messageId !== 'string' || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(sessionId) || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(messageId)) return false;
@@ -473,39 +525,61 @@ export class LiveHub {
         if (this.dispatching || this.sessions.size === 0) return;
         this.dispatching = true;
         try {
-            const ready = [...this.sessions.values()].filter(s => this.hostConnected(s.boxId) && this.deps.botChannelConnected(s.botId));
+            // Sessions that can take a push now: host and Channel connected, not held (the owner's controls, the wake limit)
+            const ready = [...this.sessions.values()].filter(s => !s.held && this.hostConnected(s.boxId) && this.sessionChannelConnected(s.sessionId));
             if (!ready.length) return;
+            // A per-session cap: one backlogged session does not starve the others
             const rows = (await this.db.query(
-                `SELECT i.id, i.session_id, i.message_id, i.thread_id, i.reason, i.live_sent_at, i.live_wake_counted, i.created_at,
-                        m.content, m.author_id, m.created_at AS message_at, m.deleted_at, u.username, u.bot AS author_bot, srv.owner_id
-                 FROM agent_inbox i JOIN agent_sessions s ON s.id = i.session_id JOIN messages m ON m.id = i.message_id
-                 JOIN servers srv ON srv.id = s.server_id LEFT JOIN users u ON u.id = m.author_id
-                 WHERE i.session_id = ANY($1) AND s.state = 'live' AND s.live_mode AND i.acked_at IS NULL AND i.batch_id IS NULL
-                 ORDER BY i.id LIMIT 300`, [ready.map(s => s.sessionId)])).rows;
-            const blocked = new Set<string>();
+                `SELECT x.id, x.session_id, x.message_id, x.reason, x.hello, x.live_sent_at, x.live_wake_counted
+                 FROM unnest($1::char(26)[]) AS sid(id)
+                 CROSS JOIN LATERAL (SELECT i.* FROM agent_inbox i WHERE i.session_id = sid.id AND i.acked_at IS NULL AND i.batch_id IS NULL
+                                     ORDER BY i.id LIMIT 20) x
+                 ORDER BY x.session_id, x.id`, [ready.map(s => s.sessionId)])).rows;
+            const bySession = new Map<string, any[]>();
             for (const r of rows) {
-                const sessionId = r.session_id.trim();
+                const sid = r.session_id.trim();
+                const list = bySession.get(sid) ?? [];
+                list.push(r);
+                bySession.set(sid, list);
+            }
+            for (const [sessionId, list] of bySession) {
                 const s = this.sessions.get(sessionId);
-                if (!s || blocked.has(sessionId)) continue;
-                // Not messages for the agent's model: the hello notice a /start posts, lurk reads, subtask briefs
-                if (r.reason === 'command' || r.reason === 'lurk' || r.reason === 'delegate' || r.deleted_at || !r.content) {
-                    await this.db.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE id = $1`, [r.id]);
-                    continue;
+                if (!s) continue;
+                // The hello a /start posts and lurk reads are finished with, not pushed; everything else (notices to the agent, a subtask's summary) is
+                const silent = list.filter(r => r.hello || r.reason === 'lurk');
+                if (silent.length) await this.db.query(`UPDATE agent_inbox SET acked_at = NOW() WHERE id = ANY($1)`, [silent.map(r => r.id)]);
+                const due = list.filter(r => !r.hello && r.reason !== 'lurk'
+                    && !(r.live_sent_at && Date.now() - new Date(r.live_sent_at).getTime() < redeliverMs()));
+                if (!due.length) continue;
+                // The same checks the per-wake claim runs, now, before anything is pushed
+                const client = await this.db.connect();
+                let kept: Awaited<ReturnType<typeof recheckLiveRows>> = [];
+                let notices: Notice[] = [];
+                try {
+                    await client.query('BEGIN');
+                    kept = await recheckLiveRows(client, sessionId, due.map(r => r.id), notices);
+                    await client.query('COMMIT');
+                } catch (err) { await client.query('ROLLBACK').catch(() => {}); kept = []; notices = []; } finally { client.release(); }
+                if (notices.length) this.emit(notices);
+                for (const k of kept) {
+                    if (s.held) break;
+                    const row = k.row;
+                    if (!row.live_wake_counted && !(await this.countWake(s, row.id))) break;
+                    const e = k.entry;
+                    this.deps.emitToBot(s.botId, 'LiveDeliver', {
+                        sessionId, channelId: s.channelId, channelName: s.channelName,
+                        // The authority the server stamped on the message (the per-wake claim's own value); the owner's own bot is marked as such;
+                        // a notice written by the server has none
+                        authority: e.authority ?? (e.ownerBot ? 'director' : 'system'),
+                        ownerBot: !!e.ownerBot, ownerBotDirect: !!e.ownerBotDirect, reason: e.reason,
+                        message: { id: e.messageId, content: e.content ?? '', authorId: e.authorId, authorUsername: e.authorName ?? 'agora', authorBot: e.authorBot,
+                            channelId: s.channelId, threadId: e.threadId, createdAt: e.createdAt },
+                    });
+                    await this.db.query(`UPDATE agent_inbox SET live_sent_at = NOW() WHERE id = $1`, [row.id]);
+                    // The server's clock for the run-time limit starts here, and starts again at the next delivery (a resend of the
+                    // same message, because its acknowledgement was slow, is not a new delivery)
+                    if (!row.live_sent_at) s.run = { startedMs: Date.now(), step: 0 };
                 }
-                if (s.held) { blocked.add(sessionId); continue; }
-                if (r.live_sent_at && Date.now() - new Date(r.live_sent_at).getTime() < redeliverMs()) continue;
-                if (!r.live_wake_counted && !(await this.countWake(s, r.id))) { blocked.add(sessionId); continue; }
-                const author = r.author_id?.trim() ?? null;
-                this.deps.emitToBot(s.botId, 'LiveDeliver', {
-                    sessionId, channelId: s.channelId, channelName: s.channelName,
-                    // The authority the server stamps: the server owner, or someone it lets direct (routing decided who may reach this session)
-                    authority: author && author === r.owner_id.trim() ? 'owner' : 'director',
-                    message: {
-                        id: r.message_id.trim(), content: r.content, authorId: author, authorUsername: r.username ?? 'unknown', authorBot: !!r.author_bot,
-                        channelId: s.channelId, threadId: r.thread_id?.trim() ?? null, createdAt: new Date(r.message_at).toISOString(),
-                    },
-                });
-                await this.db.query(`UPDATE agent_inbox SET live_sent_at = NOW() WHERE id = $1`, [r.id]);
             }
         } finally { this.dispatching = false; }
     }
@@ -524,8 +598,7 @@ export class LiveHub {
             if (limit !== null && Number(row.wakes_used) >= limit) {
                 if (!s.limitHeld) {
                     s.limitHeld = true;
-                    notices = [await postNotice(client, s.channelId,
-                        `**${s.profile}** has used its wake limit (${row.wakes_used} of ${limit}). Further messages are held, not delivered, until the limit is lifted in Settings → Agents.`)];
+                    void this.track(this.sayOnce(s, 'wake_limit', `**${s.profile}** has used its wake limit (${row.wakes_used} of ${limit}). Further messages are held, not delivered, until the limit is lifted in Settings → Agents.`)).catch(() => {});
                 }
             } else {
                 await client.query(`UPDATE agent_sessions SET wakes_used = wakes_used + 1, last_active_at = NOW() WHERE id = $1`, [s.sessionId]);
@@ -573,7 +646,7 @@ export class LiveHub {
             await client.query(
                 `DELETE FROM live_terminal_turns WHERE session_id = $1 AND id NOT IN (SELECT id FROM live_terminal_turns WHERE session_id = $1 ORDER BY id DESC LIMIT ${MAX_TURNS_PER_SESSION})`, [s.sessionId]);
             await client.query('COMMIT');
-            s.turn = { startedMs: Date.now(), step: 0 };
+            s.turn = { startedMs: Date.now() };
         } catch (err) {
             await client.query('ROLLBACK').catch(() => {});
             throw err;
@@ -587,7 +660,11 @@ export class LiveHub {
                     agent_reported_clean = ($2::text = 'stop_hook' AND start_sha IS NOT NULL AND $3::text IS NOT NULL),
                     unverified_reason = CASE WHEN $2::text <> 'stop_hook' THEN 'no_idle_signal' WHEN start_sha IS NULL OR $3::text IS NULL THEN 'no_commit_read' ELSE NULL END
              WHERE session_id = $1 AND ended_at IS NULL`, [s.sessionId, signal, sha, branch]);
+        // The agent's reported end ends the clock the server started at a delivery, if the ended turn began after that delivery
+        // (the end of an older turn, a typed one, does not stop a clock a newer delivery started)
+        const began = s.turn?.startedMs ?? null;
         s.turn = null;
+        if (signal === 'stop_hook' && s.run && began !== null && began >= s.run.startedMs) s.run = null;
     }
 
     // ─── Notices ───
@@ -684,6 +761,13 @@ export class LiveHub {
     // ─── The sweep ───
 
     async sweep(): Promise<void> {
+        if (this.sweeping) return;
+        this.sweeping = true;
+        try { await this.sweepOnce(); } finally { this.sweeping = false; }
+    }
+    private sweeping = false;
+
+    private async sweepOnce(): Promise<void> {
         const now = Date.now();
         // One query for every connected box's desired sessions
         const boxIds = [...this.hosts.keys()];
@@ -694,19 +778,20 @@ export class LiveHub {
         for (const s of this.sessions.values()) {
             // Run-time limit: Escape, then Escape again, then Ctrl-C, then the CLI is stopped and started again (resumed).
             // Enforced here and by the host: nothing the CLI reports can stop it.
-            if (s.turn && s.turnLimitSec !== null) {
-                const over = now - s.turn.startedMs - s.turnLimitSec * 1000;
+            if (s.run && s.turnLimitSec !== null && this.hostConnected(s.boxId)) {
+                const over = now - s.run.startedMs - s.turnLimitSec * 1000;
                 const step = over < 0 ? 0 : Math.min(4, 1 + Math.floor(over / Math.max(1, escalateMs())));
-                if (step > s.turn.step) {
-                    s.turn.step = step;
+                if (step > s.run.step) {
+                    s.run.step = step;
                     this.hosts.get(s.boxId)?.socket.emit('live:interrupt', { sessionId: s.sessionId, step });
                     const what = ['', 'was interrupted (Escape)', 'was interrupted again (Escape)', 'was interrupted with Ctrl-C', 'ignored the interrupts: its CLI is being stopped and started again with its conversation resumed'][step];
                     void this.track(this.say(s, `**${s.profile}**'s turn passed its run-time limit (${s.turnLimitSec >= 60 ? `${Math.round(s.turnLimitSec / 60)} min` : `${s.turnLimitSec} s`}) and ${what}.`)).catch(() => {});
+                    if (step === 4) s.run = null;
                 }
             }
             // The Channel is the only delivery road: say so when it is not connected, never type instead
             const alive = (s.state === 'idle' || s.state === 'working') && this.hostConnected(s.boxId);
-            if (alive && !this.deps.botChannelConnected(s.botId)) {
+            if (alive && !this.sessionChannelConnected(s.sessionId)) {
                 if (now - s.stateAtMs > channelGraceMs() && s.note !== 'channel_unavailable') {
                     s.note = 'channel_unavailable';
                     this.toViewers(s, 'live:state', { state: s.state, note: s.note });
@@ -756,10 +841,9 @@ export class LiveHub {
             for (const [boxId, h] of [...this.hosts]) {
                 const r = byHost.get(h.info.hostId);
                 if (!r || r.revoked_at || !r.box_id || Number(r.generation) !== h.info.generation || r.desired_state !== 'running') {
-                    this.hosts.delete(boxId);
+                    this.dropHost(h, 'host_changed');
                     h.socket.emit('live:refused', { code: 'host_changed' });
                     h.socket.disconnect(true);
-                    for (const s of this.sessions.values()) if (s.boxId === boxId) this.setState(s, 'stopped', 'box_disconnected');
                 }
             }
         }
@@ -834,7 +918,8 @@ async function hostHandshake(d: LiveAuthDeps, socket: Socket, next: (err?: Error
     const row = (await d.db.query(
         `SELECT h.id, h.server_id, h.secret_hash, h.kind, h.box_id, h.box_generation, b.generation AS box_current_generation, b.desired_state
          FROM agent_hosts h LEFT JOIN agent_boxes b ON b.id = h.box_id WHERE h.id = $1 AND h.revoked_at IS NULL`, [m[1]])).rows[0];
-    if (!row || !await verifyBotSecret(m[2], row.secret_hash)) return next(new Error('Invalid host token'));
+    if (!row) return next(new Error('Invalid host token'));
+    // (the box signature rule first, from the row alone: it needs no secret)
     const refused = await d.provenanceRefused(socket.handshake.headers, {
         kind: 'host', id: row.id.trim(), serverId: row.server_id.trim(), boxId: row.box_id?.trim() || null,
         generation: intOrNull(row.box_generation), currentGeneration: intOrNull(row.box_current_generation),
@@ -846,7 +931,9 @@ async function hostHandshake(d: LiveAuthDeps, socket: Socket, next: (err?: Error
     if (Number(row.box_generation) !== Number(row.box_current_generation)) return next(new Error('box_changed'));
     const protocol = Number.isInteger(auth.liveProtocol) ? Math.min(auth.liveProtocol as number, LIVE_PROTOCOL) : 0;
     if (protocol < LIVE_PROTOCOL) return next(new Error('unsupported_protocol'));
+    // A box that already has its host is answered before the (slow) secret check: a second socket costs nothing
     if (d.hub.hostConnected(row.box_id.trim(), Number(row.box_generation))) return next(new Error('host_already_connected'));
+    if (!await verifyBotSecret(m[2], row.secret_hash)) return next(new Error('Invalid host token'));
     await d.db.query(`UPDATE agent_hosts SET live_protocol = $2 WHERE id = $1`, [row.id, protocol]);
     socket.data.liveHost = { hostId: row.id.trim(), boxId: row.box_id.trim(), serverId: row.server_id.trim(), generation: Number(row.box_generation) } satisfies LiveHostInfo;
     next();

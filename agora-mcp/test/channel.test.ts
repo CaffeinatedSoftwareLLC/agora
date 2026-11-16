@@ -386,6 +386,25 @@ describe('live terminal mode: the server routes, the Channel only carries', () =
         expect(acks).toHaveLength(1);
     });
 
+    it('says hello with its session id on every connection, so the server can replay what it holds', () => {
+        const hellos: any[] = [];
+        const socket = new EventEmitter();
+        const channel = new AgoraChannel({ api: fakeApi(), auth: 'subscription', liveSession: SESSION, notify: async () => {} });
+        channel.attach({ on: (e, h) => socket.on(e, h), emit: (e: string, p: any) => { if (e === 'LiveHello') hellos.push(p); return true; }, disconnect: () => {} });
+        socket.emit('connect');
+        socket.emit('connect');
+        expect(hellos).toEqual([{ sessionId: SESSION }, { sessionId: SESSION }]);
+    });
+
+    it('marks the owner own bot and a server notice the way the per-wake prompt does', async () => {
+        const { channel, sent, acks } = live();
+        await channel.onLiveDeliver(delivery({ authority: 'director', ownerBot: true, ownerBotDirect: true }), a => acks.push(a));
+        expect((sent[0].params.meta as any)).toMatchObject({ authority: 'director', owner_bot: 'true' });
+        await channel.onLiveDeliver(delivery({ authority: 'system', reason: 'command' }), a => acks.push(a));
+        expect((sent[1].params.meta as any)).toMatchObject({ authority: 'system', kind: 'command' });
+        expect((sent[1].params.meta as any).owner_bot).toBeUndefined();
+    });
+
     it('a server socket event drives it end to end', async () => {
         const { sent, acks, socket } = live();
         socket.emit('LiveDeliver', delivery());
