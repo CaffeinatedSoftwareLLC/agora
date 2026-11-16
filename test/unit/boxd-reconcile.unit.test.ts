@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { BACKOFF_START_MS, FAIL_LIMIT, Reconciler, UPGRADE_WAIT_MS, type ReconcileConfig } from '../../src/boxes/boxd/reconcile';
 import { boxContainerName, boxNetworkName, boxVolumeName } from '../../src/lib/boxes/contract';
 import { parsePools } from '../../src/boxes/boxd/subnets';
-import { FakeDocker } from '../boxes/boxd-fake-docker';
+import { FakeDocker, asOfRelease041 } from '../boxes/boxd-fake-docker';
 import { MemoryStore, fakeBoxId, quietLog } from '../boxes/boxd-fakes';
 
 const EDGE = 'agora-box-edge-1';
@@ -352,6 +352,134 @@ describe('boxd reconcile', () => {
         await t.r.pass();
         expect(t.store.get(b.id).imageVersion).toBe(2);
         expect(t.docker.count(`removeVolume`)).toBe(0);
+    });
+
+    describe('a box made by an older release (0.4.1 box image v5, stack now on v7)', () => {
+        // The box exists on the current code at v1 (the fake stack), then is rewritten to the 0.4.1
+        // container shape and the stack "upgrades" to v7
+        async function oldBox() {
+            const box = t.store.add();
+            await t.r.pass();
+            const n = names(box.id);
+            asOfRelease041(t.docker.containers.get(n.c), 1);
+            t.docker.containers.get(n.c).Config.Image = 'agora/box:1';
+            t.docker.containers.get(n.c).Config.Labels['org.agora.box.version'] = '1';
+            t.setConfig({ image: 'agora/box:7', imageVersion: 7 });
+            return { box, n };
+        }
+
+        it('is upgraded onto the current image, with the upgrade notice, new tokens and no drift', async () => {
+            const { box, n } = await oldBox();
+            const minted = t.store.minted.length;
+            await t.r.pass();
+            const row = t.store.get(box.id);
+            expect(row.state).toBe('running');
+            expect(row.imageVersion).toBe(7);
+            expect(row.lastError).toBeNull();
+            const info = t.docker.containers.get(n.c);
+            expect(info.Config.Image).toBe('agora/box:7');
+            expect(info.Config.User).toBe('0:0');
+            expect(t.store.minted.length).toBe(minted + 1);
+            expect(t.store.notices.filter(x => x.kind === 'drift')).toHaveLength(0);
+            expect(t.store.notices.find(x => x.kind === 'upgraded')?.content).toContain('v1 to v7');
+            expect(t.docker.count('removeVolume')).toBe(0);
+            // and then it is a current box: the strict check applies again
+            await t.r.pass();
+            expect(t.store.get(box.id).state).toBe('running');
+        });
+
+        it('keeps running meanwhile (not stopped or refused) while a run is active', async () => {
+            const { box, n } = await oldBox();
+            t.store.activeRuns.add(box.id);
+            await t.r.pass();
+            await t.r.pass();
+            expect(t.store.get(box.id).state).toBe('running');
+            expect(t.store.get(box.id).imageVersion).toBe(1);
+            expect(t.docker.containers.get(n.c).State.Running).toBe(true);
+            expect(t.store.notices).toHaveLength(0);
+            t.tick(UPGRADE_WAIT_MS + 1);
+            await t.r.pass();
+            expect(t.store.get(box.id).imageVersion).toBe(7);
+        });
+
+        it('is still refused when it was tampered with, and stays failed', async () => {
+            const { box, n } = await oldBox();
+            t.docker.containers.get(n.c).HostConfig.Binds = ['/:/host'];
+            await t.r.pass();
+            const row = t.store.get(box.id);
+            expect(row.state).toBe('failed');
+            expect(row.lastErrorCode).toBe('drift');
+            expect(row.lastError).toContain('binds');
+            expect(row.lastError).toContain('home folder and logins are kept');
+            expect(t.store.notices.filter(x => x.kind === 'drift')).toHaveLength(1);
+            await t.r.pass();
+            expect(t.store.get(box.id).imageVersion).toBe(1);
+        });
+
+        it('on the CURRENT image version, the old shape is still refused', async () => {
+            const box = t.store.add();
+            await t.r.pass();
+            const n = names(box.id);
+            t.docker.containers.get(n.c).Config.User = '1000:1000';
+            await t.r.pass();
+            expect(t.store.get(box.id).state).toBe('failed');
+            expect(t.store.get(box.id).lastError).toContain('user');
+        });
+
+        describe('self-heal of a box already held as failed by the 0.4.2 refusal', () => {
+            async function failedByRefusal() {
+                const { box, n } = await oldBox();
+                // What 0.4.2 left behind: stopped, failed, the old text; migration 103 marks it unverified
+                await t.docker.stopContainer(n.c);
+                Object.assign(t.store.get(box.id), {
+                    state: 'failed', lastErrorCode: 'drift_unverified',
+                    lastError: 'Refused to start: the container differs from what boxd created (user, entrypoint, env-path, cap-add, tmpfs). Rebuild the box.',
+                });
+                return { box, n };
+            }
+
+            it('is upgraded without a Rebuild, and the error is cleared', async () => {
+                const { box, n } = await failedByRefusal();
+                await t.r.pass();
+                const row = t.store.get(box.id);
+                expect(row.state).toBe('running');
+                expect(row.imageVersion).toBe(7);
+                expect(row.lastError).toBeNull();
+                expect(row.lastErrorCode).toBeNull();
+                expect(t.docker.containers.get(n.c).Config.Image).toBe('agora/box:7');
+                expect(t.store.notices.find(x => x.kind === 'upgraded')?.content).toContain('v1 to v7');
+            });
+
+            it('stays failed when its container is not ours', async () => {
+                const { box, n } = await failedByRefusal();
+                t.docker.containers.get(n.c).HostConfig.Privileged = true;
+                await t.r.pass();
+                const row = t.store.get(box.id);
+                expect(row.state).toBe('failed');
+                expect(row.lastErrorCode).toBe('drift');
+                expect(row.imageVersion).toBe(1);
+                // and it is not retried
+                await t.r.pass();
+                expect(t.store.minted).toHaveLength(1);
+            });
+
+            it('a box that failed for another reason stays failed', async () => {
+                const { box } = await failedByRefusal();
+                Object.assign(t.store.get(box.id), { lastErrorCode: null, lastError: 'the box exited 5 or more times in 10 minutes' });
+                await t.r.pass();
+                expect(t.store.get(box.id).state).toBe('failed');
+                expect(t.store.get(box.id).imageVersion).toBe(1);
+            });
+
+            it('a refusal on the current image version is not healed', async () => {
+                const box = t.store.add();
+                await t.r.pass();
+                Object.assign(t.store.get(box.id), { state: 'failed', lastErrorCode: 'drift_unverified', lastError: 'Refused to start: the container differs ...' });
+                await t.r.pass();
+                expect(t.store.get(box.id).state).toBe('failed');
+                expect(t.store.minted).toHaveLength(1);
+            });
+        });
     });
 
     describe('another build of the same box/VERSION (agora-host, agora-mcp or box/ changed)', () => {

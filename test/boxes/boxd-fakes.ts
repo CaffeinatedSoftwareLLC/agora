@@ -22,7 +22,7 @@ export function boxRow(over: Partial<BoxRow> = {}): BoxRow {
         profileId: `P${id.slice(1)}`, hostId: `H${id.slice(1)}`, homeChannelId: 'C'.repeat(26),
         generation: 0, desiredState: 'running', state: 'creating', pendingAction: null, actionRequestedAt: null,
         imageVersion: null, containerId: null, subnet: null, cpus: 2, memoryMb: 1024, pids: 256,
-        failures: 0, lastError: null, volumePurgeAfter: null,
+        failures: 0, lastError: null, lastErrorCode: null, volumePurgeAfter: null,
         ...over,
     };
 }
@@ -58,6 +58,7 @@ export class MemoryStore implements BoxStore {
         if (f.imageVersion !== undefined) r.imageVersion = f.imageVersion;
         if (f.subnet !== undefined) r.subnet = f.subnet;
         if (f.lastError !== undefined) r.lastError = f.lastError;
+        if (f.lastErrorCode !== undefined) r.lastErrorCode = f.lastErrorCode;
         if (f.failures !== undefined) r.failures = f.failures;
     }
     async clearAction(boxId: string, action: PendingAction, requestedAt: Date | null) {

@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import type { Channel } from '../../lib/contracts/server';
 import { Button } from '../../components/ui/Button';
-import { boxApi, type Box, type BoxAction, type BoxPatch } from './api';
+import { boxApi, boxUpgradeTarget, type Box, type BoxAction, type BoxPatch } from './api';
 import {
   ADAPTER_LABEL, INPUT, LIMITS, LOGIN_LABEL, TOUCH, boxError, daysLeft, domainProblem, loginHint, normalizeDomain, parseRepos,
   resourceProblem, stateChip,
@@ -22,6 +22,7 @@ export function BoxCard({ box, channels, isOwner, onChange }: {
   const [error, setError] = useState('');
   const [dialog, setDialog] = useState<'login' | 'reset' | null>(null);
   const chip = stateChip(box);
+  const upgradeTo = boxUpgradeTarget(box);
   const hint = loginHint(box);
   const deleted = !!box.deletedAt || box.desiredState === 'deleted';
   const home = channels.find(c => c.id === box.homeChannelId);
@@ -71,7 +72,12 @@ export function BoxCard({ box, channels, isOwner, onChange }: {
       {hint && !deleted && (
         <p className={`mt-1 break-words text-xs ${box.loginState === 'failed' ? 'text-danger' : 'text-warn'}`} data-testid="box-login-hint">{hint}</p>
       )}
-      {box.lastError && !deleted && (
+      {upgradeTo !== null && !deleted && (
+        <p className="mt-1 break-words text-xs text-text-muted" data-testid="box-upgrading">
+          Upgrading to box image v{upgradeTo}. Its home folder and logins are kept.
+        </p>
+      )}
+      {box.lastError && !deleted && upgradeTo === null && (
         <p className="mt-1 break-words text-xs text-danger" data-testid="box-error">Last error: {box.lastError}</p>
       )}
 
