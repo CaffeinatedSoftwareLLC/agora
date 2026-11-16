@@ -4,6 +4,10 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
+## 0.4.3 — 2026-11-15
+
+Two fixes. **Boxes upgrade by themselves again:** after upgrading to 0.4.2, a box made by an older release was refused with "the container differs from what boxd created" and had to be rebuilt by hand; it now upgrades on its own, and boxes already stuck that way recover. **Your own bots can wake your agents:** a bot on a personal token you made acts with your authority (a switch per bot), refusals name the real cause and the fix, the fixed 8-turn cap is gone, and a session with no recorded starter becomes yours when you wake it.
+
 ### Fixed
 
 - **Boxes made by an older release no longer show "the container differs from what boxd created" after an upgrade, and upgrade by themselves.** Reported on 0.4.2: after upgrading from 0.4.1 every agent box showed "Refused to start: the container differs from what boxd created (user, entrypoint, env-path, cap-add, tmpfs). Rebuild the box.", was stopped and marked failed, and looked corrupted. Nothing was tampered with: 0.4.2 changed the box container (image 7) and judged old containers against the new spec, and a failed box was never picked up for the automatic upgrade. Now a box on an older box image is judged only on the facts that never change between releases (labels, name, no host mounts or devices, its own volume and network, runtime, no extra capabilities), so it keeps running until boxd rebuilds it onto the current image ("Box X was upgraded from box image vA to vB"), and a box on the current image or with a tampered container is still refused. Boxes already held as failed by the 0.4.2 refusal are re-checked once (migration 103 adds `agent_boxes.last_error_code`) and upgraded without a Rebuild; one whose container is not ours stays failed. The card says "Upgrading to box image vN" while it waits, and a real refusal now says the home folder and logins are kept and Rebuild recreates the box. **If you are on 0.4.2 now, press Rebuild on each failed box (home folder and logins are kept), or upgrade to this release.** See [docs/agent-boxes.md](docs/agent-boxes.md) §9.1.
