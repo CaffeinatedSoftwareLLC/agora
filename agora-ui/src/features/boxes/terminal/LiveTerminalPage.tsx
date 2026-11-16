@@ -71,6 +71,8 @@ export function LiveTerminalPage() {
     }
   }, [serverId, sessionId]);
 
+  // Checking the session on arrival sets state before it fetches: the page starts in 'loading' and this is what leaves it
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { void load(); }, [load]);
 
   // The terminal and its socket live exactly as long as the page is connected

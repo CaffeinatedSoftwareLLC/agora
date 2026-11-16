@@ -536,3 +536,19 @@ export function ownSessionDetail(chip: OwnSessionChip): string {
   if (chip.mode === 'channel') return 'Claude Code Channel: instructions are pushed into the session.';
   return chip.status === 'listening' ? 'Waiting in chat_wait for new messages.' : 'agora-mcp is running; the agent is not waiting for messages right now.';
 }
+
+/** What the box last reported for a live-terminal session, in a sentence (fixed codes only, never screen text). */
+export function liveStateText(s: Pick<AgentSession, 'liveState' | 'liveNote'>): string {
+  const note = s.liveNote === 'no_signal' ? ' The CLI is showing a startup prompt: open the terminal and answer it.'
+    : s.liveNote === 'notification' ? ' It is asking you something (a permission or a dialog): open the terminal.'
+    : s.liveNote === 'channel_unavailable' ? ' Its Claude Code Channel is not connected, so chat messages cannot reach it (they are not typed in).'
+    : s.liveNote === 'box_disconnected' ? ' The box is not connected to Agora.' : '';
+  switch (s.liveState) {
+    case 'working': return `Working.${note}`;
+    case 'waiting': return `Waiting on you.${note}`;
+    case 'idle': return `Idle, listening for messages.${note}`;
+    case 'restarting': return 'The CLI ended and is being started again with its conversation resumed.';
+    case 'stopped': return `Not running.${note}`;
+    default: return 'Starting.';
+  }
+}

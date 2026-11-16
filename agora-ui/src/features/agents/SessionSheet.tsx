@@ -9,7 +9,7 @@ import { useOverlayFocus } from '../shell/useOverlayFocus';
 import { BoxModeBadge } from '../boxes/BoxModeBadge';
 import {
   ERRORS, HOSTED_ONLY, STATE_LABEL, TERMINAL_BUDGET, actionText, classifyCommandError, compactTokens, deriveChips, resetTime, runAgentCommand, sessionState, stopLabel,
-  ownerTokenNote, terminalLabel, terminalUsage, type AgentProfile, type AgentSession, type ChipState, type CommandBody,
+  liveStateText, ownerTokenNote, terminalLabel, terminalUsage, type AgentProfile, type AgentSession, type ChipState, type CommandBody,
 } from './agentSessions';
 
 /** A clock time in the viewer's locale, for the terminal sheet's details. */
@@ -60,22 +60,6 @@ const BTN_PRIMARY = `${BTN} bg-primary text-on-primary hover:bg-primary-hover`;
 const BTN_SECONDARY = `${BTN} border border-border bg-surface-hover text-text hover:bg-bg`;
 const BTN_DANGER = `${BTN} border border-danger/40 bg-danger/15 text-danger hover:bg-danger/25`;
 const BTN_SMALL = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg px-3 text-sm text-text hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50';
-
-/** What the box last reported for a live-terminal session, in a sentence (fixed codes only, never screen text). */
-export function liveStateText(s: Pick<AgentSession, 'liveState' | 'liveNote'>): string {
-  const note = s.liveNote === 'no_signal' ? ' The CLI is showing a startup prompt: open the terminal and answer it.'
-    : s.liveNote === 'notification' ? ' It is asking you something (a permission or a dialog): open the terminal.'
-    : s.liveNote === 'channel_unavailable' ? ' Its Claude Code Channel is not connected, so chat messages cannot reach it (they are not typed in).'
-    : s.liveNote === 'box_disconnected' ? ' The box is not connected to Agora.' : '';
-  switch (s.liveState) {
-    case 'working': return `Working.${note}`;
-    case 'waiting': return `Waiting on you.${note}`;
-    case 'idle': return `Idle, listening for messages.${note}`;
-    case 'restarting': return 'The CLI ended and is being started again with its conversation resumed.';
-    case 'stopped': return `Not running.${note}`;
-    default: return 'Starting.';
-  }
-}
 
 function shortId(id: string): string {
   return `${id.slice(0, 8)}…`;
