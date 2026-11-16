@@ -742,7 +742,7 @@ describe('state, turns and limits', () => {
         await settle(20);
         await liveHub()!.sweep();
         await until(() => w.events.some(e => e.event === 'live:state' && e.data.note === 'channel_unavailable'));
-        expect((await notices('%Channel is not connected%')).length).toBe(1);
+        await until(async () => (await notices('%Channel is not connected%')).length === 1);
         await liveHub()!.sweep();
         expect((await notices('%Channel is not connected%')).length).toBe(1);
         expect(host.input).toEqual([]);
