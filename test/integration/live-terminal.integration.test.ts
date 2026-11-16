@@ -5,6 +5,7 @@ import { setupTestApp, authedUser, createServer, joinViaInvite, cleanDatabase } 
 import { signEdge } from '../../src/lib/boxes/contract';
 import { rotateBoxTokens } from '../../src/lib/boxes/tokens';
 import { liveHub, Ring, RING_BYTES } from '../../src/lib/boxes/live-hub';
+import { agentPresence } from '../../src/lib/agent-presence';
 
 /**
  * Live terminals (docs/planning/live-terminals.md): the mode switch, the session lifecycle, and the hub
@@ -537,6 +538,9 @@ describe('state, turns and limits', () => {
     });
 
     test('a running terminal with no Channel connection is reported, in the state and in the channel, never typed around', async () => {
+        const botId = (await rows(`SELECT bot_id FROM agent_sessions WHERE id = $1`, [sessionId]))[0].bot_id.trim();
+        // An earlier test's channel connection may still be closing
+        await until(() => agentPresence.status(botId).status === 'offline');
         const w = await watch(ownerSession, sessionId);
         hostSays('live:state', { state: 'idle', note: null });
         await until(() => liveHub()!.stateOf(sessionId)!.state === 'idle');
