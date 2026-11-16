@@ -5,6 +5,7 @@ import { asService } from '../lib/agent-sessions';
 import { encryptString } from '../lib/encryption';
 import { config } from '../config';
 import { DOMAIN_ENTRY } from '../lib/boxes/contract';
+import { BOX_IMAGE_VERSION } from '../boxes/boxd/version';
 import { boxHasLogin } from '../lib/boxes/adapters';
 import { decideEdgeRequest, EdgeDecisionError, loginBlockedHosts } from '../lib/boxes/edge-requests';
 import { BOX_ADAPTERS, BoxError, MODEL_PATTERN, REPO_PATTERN, boxAction, createBox, deleteBox, patchBox, purgeBox, restoreBox } from '../lib/boxes/service';
@@ -43,7 +44,7 @@ export function boxJson(r: any, loginBlocked: string[] = []) {
         pendingAction: r.pending_action ?? null, generation: r.generation, imageVersion: r.image_version ?? null,
         loginState: r.login_state, homeChannelId: r.home_channel_id?.trim() ?? null, allowedDomains: r.allowed_domains ?? [],
         repos: r.repos ?? [], cpus: Number(r.cpus), memoryMb: r.memory_mb, pids: r.pids,
-        lastError: r.last_error ?? null, lastSeenAt: r.last_seen_at ?? null, createdAt: r.created_at,
+        lastError: r.last_error ?? null, lastErrorCode: r.last_error_code ?? null, currentImageVersion: BOX_IMAGE_VERSION, lastSeenAt: r.last_seen_at ?? null, createdAt: r.created_at,
         deletedAt: r.deleted_at ?? null, volumePurgeAfter: r.volume_purge_after ?? null, policies: r.policies ?? [],
         loginError: r.login_state === 'failed' ? (r.login_error ?? null) : null,
         loginBlockedHosts: loginBlocked,

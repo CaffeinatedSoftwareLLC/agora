@@ -66,6 +66,26 @@ describe('box list', () => {
     expect(within(screen.getByTestId('box-waiting')).getByTestId('box-login-hint')).toHaveTextContent('The login is waiting: allow auth.openai.com');
   });
 
+  it('says a box on an older image is upgrading, not failed (also one held by the 0.4.2 drift refusal)', async () => {
+    const refusal = 'Refused to start: the container differs from what boxd created (user, entrypoint). Rebuild the box.';
+    boxes = [
+      box({ id: 'U'.repeat(26), name: 'old', imageVersion: 5, currentImageVersion: 7 }),
+      box({ id: 'H'.repeat(26), name: 'held', imageVersion: 5, currentImageVersion: 7, state: 'failed', lastError: refusal, lastErrorCode: 'drift_unverified' }),
+      box({ id: 'T'.repeat(26), name: 'tampered', imageVersion: 5, currentImageVersion: 7, state: 'failed', lastError: refusal, lastErrorCode: 'drift' }),
+    ];
+    renderSection();
+    for (const name of ['old', 'held']) {
+      const card = await screen.findByTestId(`box-${name}`);
+      expect(within(card).getByTestId('box-upgrading')).toHaveTextContent('Upgrading to box image v7');
+      expect(within(card).queryByTestId('box-error')).toBeNull();
+    }
+    expect(within(screen.getByTestId('box-held')).getByTestId('box-state')).toHaveTextContent('upgrading');
+    const tampered = screen.getByTestId('box-tampered');
+    expect(within(tampered).queryByTestId('box-upgrading')).toBeNull();
+    expect(within(tampered).getByTestId('box-state')).toHaveTextContent('failed');
+    expect(within(tampered).getByTestId('box-error')).toHaveTextContent('Refused to start');
+  });
+
   it('shows a failed box with its last error, and pending actions', async () => {
     boxes = [
       box({ id: 'F'.repeat(26), name: 'broken', state: 'failed', lastError: 'five failed starts in ten minutes', loginState: 'none' }),

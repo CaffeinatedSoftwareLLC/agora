@@ -36,6 +36,8 @@ export interface BoxRow {
     pids: number;
     failures: number;
     lastError: string | null;
+    /** Why it failed, where code acts on it: 'drift' (refused container), 'drift_unverified' (the same, from before codes existed) */
+    lastErrorCode: string | null;
     volumePurgeAfter: Date | null;
 }
 
@@ -45,6 +47,7 @@ export interface BoxRecord {
     imageVersion?: number | null;
     subnet?: string | null;
     lastError?: string | null;
+    lastErrorCode?: string | null;
     failures?: number;
     seen?: boolean;
 }
@@ -99,6 +102,7 @@ export class DbBoxStore implements BoxStore {
             pids: row.pids,
             failures: row.failures,
             lastError: row.last_error,
+            lastErrorCode: row.last_error_code ?? null,
             volumePurgeAfter: row.volume_purge_after,
         }));
     }
@@ -125,6 +129,7 @@ export class DbBoxStore implements BoxStore {
             set('last_error', f.lastError === null ? null : f.lastError.slice(0, 500));
             sets.push(f.lastError === null ? 'last_error_at = NULL' : 'last_error_at = NOW()');
         }
+        if (f.lastErrorCode !== undefined) set('last_error_code', f.lastErrorCode);
         if (f.failures !== undefined) set('failures', f.failures);
         if (f.seen) sets.push('last_seen_at = NOW()');
         if (sets.length === 0) return;

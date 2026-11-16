@@ -5,7 +5,7 @@ import {
     BOX_PATH, LOADER_ENV, containerDrift, containerSpec, limitsDiffer, networkDrift, networkSpec, validApiKeyEnv, volumeSpec, type BoxSpecInput, type ExpectedBox,
 } from '../../src/boxes/boxd/spec';
 import { BOX_IMAGE_VERSION } from '../../src/boxes/boxd/version';
-import { inspectFrom } from '../boxes/boxd-fake-docker';
+import { asOfRelease041, inspectFrom } from '../boxes/boxd-fake-docker';
 
 const BOX = '01JBXA0000000000000000000Z';
 const input = (over: Partial<BoxSpecInput> = {}): BoxSpecInput => ({
@@ -199,6 +199,56 @@ describe('boxd start check (drift)', () => {
             expect(containerDrift(info, expected())).toContain(field);
         });
     }
+
+    describe('a container made by an older release (legacy: its box image is older than the current one)', () => {
+        // Agora 0.4.2 refused every such box ("the container differs from what boxd created")
+        const old = () => asOfRelease041(good());
+        const legacy = (over: Partial<ExpectedBox> = {}) => expected({ image: '', imageVersion: 5, legacy: true, ...over });
+
+        it('the 0.4.1 shape is not judged on the fields the spec changed since', () => {
+            const out = containerDrift(old(), legacy());
+            expect(out).toEqual(['image']); // boxd's reconciler exempts a box image of an older version
+        });
+
+        it('the same 0.4.1 shape claiming the current image version is still refused', () => {
+            const out = containerDrift(old(), expected({ imageVersion: 5 }));
+            expect(out).toEqual(expect.arrayContaining(['user', 'entrypoint', 'env-path', 'cap-add', 'tmpfs']));
+        });
+
+        const tamper: [string, (i: any) => void][] = [
+            ['binds', i => { i.HostConfig.Binds = ['/:/host']; }],
+            ['mounts', i => { i.Mounts.push({ Type: 'volume', Name: 'other-home', Destination: '/mnt' }); }],
+            ['mounts', i => { i.Mounts[0].Name = 'agora-box-01jbxb0000000000000000000z-home'; }],
+            ['labels', i => { i.Config.Labels['org.agora.instance'] = 'agora2'; }],
+            ['labels', i => { i.Config.Labels['org.agora.box'] = 'B'.repeat(26); }],
+            ['name', i => { i.Name = '/agora-box-other'; }],
+            ['runtime', i => { i.HostConfig.Runtime = 'runc'; }],
+            ['privileged', i => { i.HostConfig.Privileged = true; }],
+            ['cap-drop', i => { i.HostConfig.CapDrop = []; }],
+            ['cap-add', i => { i.HostConfig.CapAdd = ['SYS_ADMIN']; }],
+            ['read-only', i => { i.HostConfig.ReadonlyRootfs = false; }],
+            ['security-opt', i => { i.HostConfig.SecurityOpt = []; }],
+            ['devices', i => { i.HostConfig.Devices = [{ PathOnHost: '/dev/kvm' }]; }],
+            ['network-mode', i => { i.HostConfig.NetworkMode = 'host'; }],
+            ['networks', i => { i.NetworkSettings.Networks.agora_default = { IPAMConfig: null }; }],
+            ['namespaces', i => { i.HostConfig.PidMode = 'host'; }],
+            ['env-loader', i => { i.Config.Env.push('LD_PRELOAD=/home/agent/evil.so'); }],
+            ['env-home', i => { i.Config.Env = i.Config.Env.map((e: string) => e.startsWith('HOME=') ? 'HOME=/root' : e); }],
+        ];
+        for (const [field, fn] of tamper) {
+            it(`still refuses a tampered one (${field})`, () => {
+                const info = old();
+                fn(info);
+                expect(containerDrift(info, legacy())).toContain(field);
+            });
+        }
+
+        it('a foreign image is left to the reconciler (it exempts only box images)', () => {
+            const info = old();
+            info.Config.Image = 'evil/image:5';
+            expect(containerDrift(info, legacy())).toContain('image');
+        });
+    });
 
     it('accepts the capability names however Docker spells them (SETUID or CAP_SETUID, any order)', () => {
         const info = good();

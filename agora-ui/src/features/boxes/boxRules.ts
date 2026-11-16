@@ -1,5 +1,5 @@
 import { ApiError } from '../../lib/api';
-import type { Box, BoxAdapter, BoxAuth, BoxLogin, LoginStatus } from './api';
+import { boxUpgradeTarget, type Box, type BoxAdapter, type BoxAuth, type BoxLogin, type LoginStatus } from './api';
 
 /**
  * Client-side checks that mirror the server's (src/lib/boxes/contract.ts, the box routes'
@@ -104,7 +104,7 @@ export function modelProblem(model: string): string | null {
 export function stateChip(box: Box): { label: string; tone: string; login?: boolean } {
   if (box.deletedAt || box.desiredState === 'deleted') return { label: 'deleted', tone: 'bg-surface text-text-muted' };
   if (box.pendingAction) return { label: `${box.pendingAction} pending`, tone: 'bg-warn/20 text-warn' };
-  if (box.state === 'failed') return { label: 'failed', tone: 'bg-danger/20 text-danger' };
+  if (box.state === 'failed') return boxUpgradeTarget(box) !== null ? { label: 'upgrading', tone: 'bg-warn/20 text-warn' } : { label: 'failed', tone: 'bg-danger/20 text-danger' };
   if (box.state === 'running' && box.desiredState === 'stopped') return { label: 'stopping', tone: 'bg-warn/20 text-warn' };
   if (box.state === 'stopped' && box.desiredState === 'running') return { label: 'starting', tone: 'bg-warn/20 text-warn' };
   // A running box whose CLI isn't logged in can't answer anyone: say that, not "running"

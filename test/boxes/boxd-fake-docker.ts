@@ -24,6 +24,27 @@ export function inspectFrom(spec: ContainerCreateOptions, id = 'c'.repeat(64)): 
     };
 }
 
+/**
+ * A container as boxd of Agora 0.4.1 (box image v5) made it: the box user from the start, the
+ * image's own entrypoint and command, no PATH in the environment, no added capabilities, two
+ * tmpfs mounts, /tmp exec. Rewritten in place from a current container (the shape was checked
+ * against `git show v0.4.1:src/boxes/boxd/spec.ts`); `version` sets its image and version label.
+ */
+export function asOfRelease041(info: any, version = 5): any {
+    info.Config.User = '1000:1000';
+    info.Config.Entrypoint = null;
+    info.Config.Cmd = null;
+    info.Config.Env = (info.Config.Env as string[]).filter(e => !e.startsWith('PATH=') && !e.startsWith('AGORA_RELAY_TOKEN='));
+    info.Config.Image = `agora/box:${version}`;
+    info.Config.Labels['org.agora.box.version'] = String(version);
+    info.HostConfig.CapAdd = [];
+    info.HostConfig.Tmpfs = {
+        '/tmp': 'rw,nosuid,nodev,size=1g,mode=1777',
+        '/run/agora': 'rw,noexec,nosuid,nodev,size=1m,mode=0700,uid=1000,gid=1000',
+    };
+    return info;
+}
+
 interface FakeNetwork extends NetworkInfo { Containers: Record<string, { Name: string; IPv4Address: string }> }
 
 const matches = (labels: Record<string, string>, filter: string[] = []) => filter.every(l => {

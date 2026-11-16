@@ -1,5 +1,5 @@
 import type { Bot, ModelAgent } from '../../lib/api';
-import type { Box } from '../boxes/api';
+import { boxUpgradeTarget, type Box } from '../boxes/api';
 import { limitStopText, sessionState, stopLabel, type AgentSession } from '../agents/agentSessions';
 import type { Host, Profile } from './AgentSessionsSettings';
 
@@ -89,6 +89,8 @@ export function agentState(row: Pick<AgentRow, 'kind' | 'bot' | 'profile' | 'hos
     return { tone: 'stopped', label: 'Paused', why: bot.pausedReason ? `Paused by an admin: ${bot.pausedReason}` : 'Paused by an admin. It is read-only until resumed.' };
   }
   if (kind === 'box' && box) {
+    const upgradeTo = boxUpgradeTarget(box);
+    if (upgradeTo !== null) return { tone: 'attention', label: 'Upgrading', why: `The box is upgrading to box image v${upgradeTo}. Its home folder and logins are kept.` };
     if (box.state === 'failed') return { tone: 'stopped', label: 'Stopped', why: box.lastError ? `The box failed: ${box.lastError}` : 'The box failed to start.' };
     if (box.state === 'stopped' || box.desiredState === 'stopped') return { tone: 'stopped', label: 'Stopped', why: 'The box is stopped.' };
     if (box.state === 'creating') return { tone: 'attention', label: 'Starting', why: 'The box is being created.' };

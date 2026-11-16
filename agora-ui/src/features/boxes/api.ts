@@ -14,6 +14,18 @@ export type BoxPendingAction = 'restart' | 'rebuild' | 'reset';
 export type BoxLoginState = 'none' | 'pending' | 'logged_in' | 'failed';
 export type BoxAction = 'start' | 'stop' | 'restart' | 'rebuild' | 'reset';
 
+/**
+ * The box image version a box is waiting to be (or being) upgraded to, or null. boxd upgrades a
+ * box on an older image by itself; a box held as failed by the 0.4.2 drift refusal is picked up
+ * too. A real drift (a container that is not boxd's) is not an upgrade.
+ */
+export function boxUpgradeTarget(box: Pick<Box, 'imageVersion' | 'currentImageVersion' | 'state' | 'lastErrorCode' | 'deletedAt' | 'desiredState'>): number | null {
+  if (box.deletedAt || box.desiredState === 'deleted') return null;
+  if (box.imageVersion == null || box.currentImageVersion == null || box.imageVersion >= box.currentImageVersion) return null;
+  if (box.state === 'failed' && box.lastErrorCode !== 'drift_unverified') return null;
+  return box.currentImageVersion;
+}
+
 export interface BoxPolicy { channelId: string; autoPush: boolean; autoPr: boolean }
 
 export interface Box {
@@ -34,6 +46,10 @@ export interface Box {
   memoryMb: number;
   pids: number;
   lastError: string | null;
+  /** Why it failed, where the server acts on it: 'drift' or 'drift_unverified' (older servers leave it out) */
+  lastErrorCode?: string | null;
+  /** The box image version this server builds new boxes on (older servers leave it out) */
+  currentImageVersion?: number;
   lastSeenAt: string | null;
   createdAt: string;
   deletedAt: string | null;

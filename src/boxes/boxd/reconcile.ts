@@ -436,12 +436,20 @@ export class Reconciler {
         }
     }
 
+    /** A box recorded on an older box image than the current one. */
+    private isLegacy(box: BoxRow): boolean {
+        return box.imageVersion !== null && box.imageVersion < this.cfg.imageVersion;
+    }
+
     private async drift(box: BoxRow, info: any, subnet: string): Promise<string[]> {
         const n = this.names(box.id);
         const out = containerDrift(info, {
             instance: this.cfg.instance, boxId: box.id, generation: box.generation,
             image: box.imageVersion === this.cfg.imageVersion ? this.cfg.image : '', imageVersion: box.imageVersion ?? -1,
             runtime: this.cfg.runtime, subnet,
+            // Made by an older release: the fields this release's spec changed are not judged
+            // (upgradeOne rebuilds the box onto the current image); the rest still is
+            legacy: this.isLegacy(box),
         });
         // An older box image, waiting for its upgrade, is still one of ours
         const imageIdx = out.indexOf('image');
@@ -458,9 +466,12 @@ export class Reconciler {
         if (info?.State?.Running || info?.State?.Restarting) await this.d.docker.stopContainer(n.container, 10);
         const what = drift.join(', ');
         this.d.log.error(`box ${box.id}: refused to start, container differs from its spec: ${what}`);
-        await this.d.store.record(box.id, { state: 'failed', lastError: `Refused to start: the container differs from what boxd created (${what}). Rebuild the box.` });
+        await this.d.store.record(box.id, {
+            state: 'failed', lastErrorCode: 'drift',
+            lastError: `Refused to start: the container differs from what boxd created (${what}). The box's home folder and logins are kept; Rebuild recreates the box.`,
+        });
         if (box.state !== 'failed') {
-            await this.d.store.notice(box, 'drift', `Box **${box.name}** was not started: its container differs from what boxd created (${what}). Rebuild it in Settings → Agents.`);
+            await this.d.store.notice(box, 'drift', `Box **${box.name}** was not started: its container differs from what boxd created (${what}). Its home folder and logins are kept. Rebuild it in Settings → Agents to recreate the container.`);
         }
         box.state = 'failed';
         return 'held';
@@ -549,8 +560,7 @@ export class Reconciler {
      * §9.1): a box on an older box/VERSION, or on an older build of the current one.
      */
     private async upgradeOne(ctx: PassContext) {
-        const box = ctx.boxes.find(b => b.desiredState !== 'deleted' && b.state !== 'failed' && !b.pendingAction
-            && b.imageVersion !== null && (b.imageVersion < this.cfg.imageVersion || !!this.track.get(b.id)?.staleBuild));
+        const box = await this.nextUpgrade(ctx);
         if (!box) return;
         const t = this.trackOf(box.id);
         if (this.now() < t.nextAt) return;
@@ -562,15 +572,56 @@ export class Reconciler {
         const from = box.imageVersion;
         // A stale build is rebuilt once per image build, even if the rebuild fails
         if (from === this.cfg.imageVersion && this.build) t.rebuiltFor = this.build;
+        const healing = box.state === 'failed';
         try {
             await this.rebuild(box, ctx, false);
             t.upgradeWaitSince = undefined;
+            if (healing) {
+                // Held by a drift refusal on its older image (Agora 0.4.2): that was this upgrade
+                // not having happened yet, not tampering
+                await this.d.store.record(box.id, { lastError: null, lastErrorCode: null, failures: 0 });
+                box.lastError = null;
+                t.failures = []; t.delayMs = 0; t.nextAt = 0; t.notified = false;
+            }
             await this.d.store.notice(box, 'upgraded', from === this.cfg.imageVersion
                 ? `Box **${box.name}** was rebuilt on the current build of box image v${from} (its agora-host, agora-mcp or box scripts changed). Its home folder and logins are kept.`
                 : `Box **${box.name}** was upgraded from box image v${from} to v${this.cfg.imageVersion}. Its home folder and logins are kept.`);
         } catch (err) {
             await this.failed(box, t, err);
         }
+    }
+
+    /**
+     * The next box to move onto the current image: one that is not failed, or one failed only
+     * because 0.4.2 refused its older container (state failed, code `drift_unverified`, set by
+     * migration 103). Those are checked once more against the ownership facts: a container that
+     * is not ours stays failed, now with the plain `drift` code.
+     */
+    private async nextUpgrade(ctx: PassContext): Promise<BoxRow | undefined> {
+        for (const b of ctx.boxes) {
+            if (b.desiredState === 'deleted' || b.pendingAction || b.imageVersion === null) continue;
+            if (b.state === 'failed') {
+                if (b.lastErrorCode !== 'drift_unverified' || !this.isLegacy(b)) continue;
+                if (!(await this.legacyIsOurs(b))) continue;
+                return b;
+            }
+            if (b.imageVersion < this.cfg.imageVersion || !!this.track.get(b.id)?.staleBuild) return b;
+        }
+        return undefined;
+    }
+
+    private async legacyIsOurs(box: BoxRow): Promise<boolean> {
+        try {
+            const info = await this.d.docker.inspectContainer(this.names(box.id).container);
+            const drift = info && box.subnet ? await this.drift(box, info, box.subnet) : ['container or subnet missing'];
+            if (!drift.length) return true;
+            this.d.log.error(`box ${box.id}: stays failed, container differs from its spec: ${drift.join(', ')}`);
+            await this.d.store.record(box.id, { lastErrorCode: 'drift' });
+            box.lastErrorCode = 'drift';
+        } catch (err) {
+            this.d.log.warn(`box ${box.id}: checking its container failed: ${errText(err)}`);
+        }
+        return false;
     }
 
     /** This instance's box containers, networks and volumes that no row claims. */

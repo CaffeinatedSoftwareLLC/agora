@@ -238,6 +238,15 @@ export interface ExpectedBox {
     imageVersion: number;
     runtime: 'runsc' | 'runc';
     subnet: string;
+    /**
+     * The container was made by an older release (its box image is older than the current one) and
+     * waits to be rebuilt onto the current image. Only what the current spec changes between
+     * releases is left out (the image, user, entrypoint and command, PATH, tmpfs mounts, and the
+     * capabilities may be fewer); every ownership and isolation fact is judged as for a current
+     * box. A capability outside the current set is still refused. Never set for a box on the
+     * current image version.
+     */
+    legacy?: boolean;
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -258,12 +267,13 @@ export function containerDrift(info: any, e: ExpectedBox): string[] {
     const name = String(info?.Name ?? '').replace(/^\//, '');
     if (name !== boxContainerName(e.instance, e.boxId)) out.push('name');
     if (cfg.Image !== e.image) out.push('image');
-    if (cfg.User !== BOX_USER) out.push('user');
+    const legacy = !!e.legacy;
+    if (!legacy && cfg.User !== BOX_USER) out.push('user');
     // What PID 1 is, and the environment a process would start with
-    if (!same(cfg.Entrypoint ?? [], [...BOX_ENTRYPOINT])) out.push('entrypoint');
-    if (!empty(cfg.Cmd)) out.push('command');
+    if (!legacy && !same(cfg.Entrypoint ?? [], [...BOX_ENTRYPOINT])) out.push('entrypoint');
+    if (!legacy && !empty(cfg.Cmd)) out.push('command');
     const env = envMap(cfg.Env);
-    if (env.PATH !== BOX_PATH) out.push('env-path');
+    if (!legacy && env.PATH !== BOX_PATH) out.push('env-path');
     if (env.HOME !== BOX_HOME) out.push('env-home');
     if (Object.keys(env).some(k => LOADER_ENV.test(k))) out.push('env-loader');
     if (cfg.WorkingDir !== BOX_HOME) out.push('working-dir');
@@ -272,9 +282,9 @@ export function containerDrift(info: any, e: ExpectedBox): string[] {
     if (hc.ReadonlyRootfs !== true) out.push('read-only');
     if (!same(hc.CapDrop, ['ALL'])) out.push('cap-drop');
     // Exactly the init's capabilities, however this Docker spells them (SETUID or CAP_SETUID)
-    if (!same(capNames(hc.CapAdd), [...INIT_CAPS])) out.push('cap-add');
+    if (legacy ? capNames(hc.CapAdd).some(c => !(INIT_CAPS as readonly string[]).includes(c)) : !same(capNames(hc.CapAdd), [...INIT_CAPS])) out.push('cap-add');
     if (!same(hc.SecurityOpt, ['no-new-privileges'])) out.push('security-opt');
-    if (!same(sortKeys(hc.Tmpfs ?? {}), sortKeys(TMPFS))) out.push('tmpfs');
+    if (!legacy && !same(sortKeys(hc.Tmpfs ?? {}), sortKeys(TMPFS))) out.push('tmpfs');
     if (!empty(hc.Binds)) out.push('binds');
     if (!empty(hc.VolumesFrom)) out.push('volumes-from');
     if (!empty(hc.Devices) || !empty(hc.DeviceRequests) || !empty(hc.DeviceCgroupRules)) out.push('devices');
