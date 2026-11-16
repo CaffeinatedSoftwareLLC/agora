@@ -63,6 +63,8 @@ COPY box/agora-pr /usr/local/bin/agora-pr
 # The pseudo-terminal behind the owner's terminal in Agora (docs/box-terminal.md): Python's own pty
 # module, so nothing native to build for amd64 or arm64. Root-owned and read-only like the rest of /opt/agora.
 COPY box/agora-pty /opt/agora/agora-pty
+# Live terminals (docs/planning/live-terminals.md): the hook Claude Code runs to tell the agent's agora-host its state
+COPY box/agora-live-hook /opt/agora/agora-live-hook
 # The owner's side: as-agent (run a command with the agent's rights) and the shell's fixed startup
 # and git files; the agent's side of as-agent. All root-owned; no file of any home is ever sourced.
 COPY box/as-agent /usr/local/bin/as-agent
@@ -70,7 +72,7 @@ COPY box/as-agent-server /opt/agora/as-agent-server
 COPY box/operator.bashrc /opt/agora/operator.bashrc
 COPY box/operator.gitconfig /opt/agora/operator.gitconfig
 COPY box/AGENTS.md /opt/agora/AGENTS.md
-RUN chmod 0755 /opt/agora/agora-box-init /opt/agora/agora-box-start /opt/agora/agora-relay-supervisor /usr/local/bin/agora-pr /opt/agora/agora-pty /usr/local/bin/as-agent /opt/agora/as-agent-server \
+RUN chmod 0755 /opt/agora/agora-box-init /opt/agora/agora-box-start /opt/agora/agora-relay-supervisor /usr/local/bin/agora-pr /opt/agora/agora-pty /opt/agora/agora-live-hook /usr/local/bin/as-agent /opt/agora/as-agent-server \
  && chmod 0644 /opt/agora/AGENTS.md /opt/agora/operator.bashrc /opt/agora/operator.gitconfig
 # PATH lists root-owned directories first: anything that relies on it (docker exec, a root-run step) can't be
 # shadowed from the agent's volume. The agent's own runs get its installs first (agora-box-init sets that).

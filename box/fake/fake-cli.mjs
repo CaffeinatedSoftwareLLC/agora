@@ -8,7 +8,8 @@
 // Every call records its arguments and the names (never values) of its environment
 // variables in <state dir>/.fake-last-call.json, so isolation tests can check what a CLI saw.
 import { randomUUID, randomInt } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { spawn, execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 const cli = basename(process.argv[1]).includes('codex') ? 'codex' : 'claude';
@@ -58,7 +59,97 @@ async function reply() {
 }
 const out = event => process.stdout.write(`${JSON.stringify(event)}\n`);
 
+
+/**
+ * The interactive CLI of a live-terminal session (agora-host live-terminal.ts): `claude
+ * --dangerously-load-development-channels server:agora ...` on a terminal. Like the real one it starts
+ * the Agora MCP server from --mcp-config (agora-mcp --channel-mode) and treats a
+ * notifications/claude/channel push as a prompt; it runs the settings file's hooks around each turn
+ * (SessionStart, UserPromptSubmit, PreToolUse, Notification, Stop); a line typed on the terminal is a
+ * prompt too. What a real Claude Code login would add (the real dialogs, the real flag handling) is not
+ * here. Knobs are files in the state dir: .fake-live-dialog (a startup dialog, answered with Enter),
+ * .fake-live-notify (a permission prompt in the first turn, answered with Enter).
+ * Everything it sees is appended to <state dir>/.fake-live-*.log, never the environment's values.
+ */
+async function claudeLive() {
+    const arg = name => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : null; };
+    const log = (file, text) => { try { appendFileSync(join(stateDir, file), text + '\n'); } catch { /* no state dir */ } };
+    const knob = name => existsSync(join(stateDir, name));
+    const mcp = JSON.parse(readFileSync(arg('--mcp-config'), 'utf8')).mcpServers.agora;
+    const settings = JSON.parse(readFileSync(arg('--settings'), 'utf8'));
+    const hookOf = event => settings.hooks[event][0].hooks[0].command.split(' ')[0];
+    const fire = (event, payload = {}) => new Promise(res => {
+        const p = spawn(hookOf(event), [event], { stdio: ['pipe', 'ignore', 'ignore'] });
+        p.on('close', res); p.on('error', res);
+        p.stdin.on('error', () => {}); p.stdin.end(JSON.stringify(payload));
+    });
+    log('.fake-live-starts.log', JSON.stringify({ args, cwd: process.cwd(), at: Date.now() }));
+    // Typed input: whole lines, in order
+    let typed = '';
+    const waiting = [];
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', chunk => {
+        typed += chunk;
+        let m;
+        while ((m = /^(.*?)[\r\n]+/s.exec(typed))) {
+            typed = typed.slice(m[0].length);
+            log('.fake-live-stdin.log', m[1]);
+            const w = waiting.shift();
+            if (w) w(m[1]); else if (m[1].trim()) void turn(m[1], false);
+        }
+    });
+    process.stdin.on('end', () => process.exit(0));
+    const line = () => new Promise(r => waiting.push(r));
+
+    if (knob('.fake-live-dialog')) {
+        process.stdout.write('\x1b[33mWARNING: Loading development channels\x1b[0m\r\nPress Enter to confirm you are using this for local development > ');
+        await line();
+    }
+    const child = spawn(mcp.command, mcp.args, { env: process.env, stdio: ['pipe', 'pipe', 'inherit'] });
+    child.on('exit', () => process.exit(1));
+    let buf = '';
+    const rpc = (method, params, id) => child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method, params, ...(id !== undefined ? { id } : {}) }) + '\n');
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', d => {
+        buf += d;
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+            const msg = JSON.parse(buf.slice(0, nl)); buf = buf.slice(nl + 1);
+            if (msg.id === 1) rpc('notifications/initialized', {});
+            if (msg.method === 'notifications/claude/channel') {
+                const meta = Object.entries(msg.params.meta ?? {}).map(([k, v]) => ` ${k}="${v}"`).join('');
+                void turn(`<channel source="agora"${meta}>\n${msg.params.content}\n</channel>`, true);
+            }
+        }
+    });
+    rpc('initialize', { protocolVersion: '2025-06-18', capabilities: { experimental: { 'claude/channel': {} } }, clientInfo: { name: 'claude-code', version: '2.1.311' } }, 1);
+
+    let first = true;
+    async function turn(prompt, pushed) {
+        log('.fake-live-prompts.log', JSON.stringify({ pushed, prompt: prompt.slice(0, 500) }));
+        await fire('UserPromptSubmit', { prompt });
+        process.stdout.write(`\r\n> ${pushed ? '[channel push]' : prompt}\r\n`);
+        if (first && knob('.fake-live-notify')) {
+            first = false;
+            await fire('Notification', { notification_type: 'permission_prompt' });
+            process.stdout.write('Allow this tool call? (Enter) ');
+            await line();
+        }
+        await fire('PreToolUse', {});
+        // A turn that works on the repository leaves a commit, as a real one would
+        if (/\bcommit\b/.test(prompt)) { try { execFileSync('git', ['commit', '--allow-empty', '-q', '-m', 'fake live turn'], { stdio: 'ignore' }); } catch { /* no repo */ } }
+        if (pushed) await reply();
+        await fire('Stop', {});
+        process.stdout.write('\u2713 done\r\n');
+    }
+    await sleep(Number(process.env.FAKE_LIVE_START_MS ?? 1500));
+    process.stdout.write('Claude Code (fake)\r\nChannels (experimental) messages from server:agora inject directly in this session\r\n');
+    await fire('SessionStart', {});
+    await new Promise(() => {});
+}
+
 async function claude() {
+    if (args.includes('--dangerously-load-development-channels')) return claudeLive();
     if (args[0] === '--version') { console.log('2.1.311 (Claude Code)'); return 0; }
     if (args[0] === 'auth' && args[1] === 'login') {
         const state = randomUUID();
