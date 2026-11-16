@@ -271,6 +271,10 @@ describe('the pty', () => {
         expect(Buffer.concat(t.of('live:output').map(p => p.data)).toString()).toBe('hello world');
         const t2 = new FakeTransport();
         m.attach(t2);
+        // Re-announced once Agora has said what it wants on the new connection, not before
+        expect(t2.of('live:replay')).toEqual([]);
+        t2.fire('live:desired', { sessions: [spec()] });
+        await flush();
         expect(t2.of('live:replay')[0].data.toString()).toBe('hello world');
         expect(t2.of('live:state')[0]).toMatchObject({ sessionId: SID, state: 'starting' });
     });
@@ -282,6 +286,8 @@ describe('the pty', () => {
         for (let i = 0; i < 40; i++) ptys[0].data(Buffer.alloc(16 * 1024, 65));
         const t2 = new FakeTransport();
         m.attach(t2);
+        t2.fire('live:desired', { sessions: [spec()] });
+        await flush();
         expect(t2.of('live:replay')[0].data.length).toBeLessThanOrEqual(256 * 1024);
     });
 

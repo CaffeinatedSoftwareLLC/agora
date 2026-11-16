@@ -138,6 +138,8 @@ async function claudeLive() {
     async function turn(prompt, pushed) {
         log('.fake-live-prompts.log', JSON.stringify({ pushed, prompt: prompt.slice(0, 500) }));
         await fire('UserPromptSubmit', { prompt });
+        // (the host reads the repository's commit when it gets this event; a real turn takes far longer than that to change it)
+        await sleep(700);
         process.stdout.write(`\r\n> ${pushed ? '[channel push]' : prompt}\r\n`);
         if (first && knob('.fake-live-notify')) {
             first = false;
@@ -147,7 +149,7 @@ async function claudeLive() {
         }
         await fire('PreToolUse', {});
         // A turn that works on the repository leaves a commit, as a real one would
-        if (/\bcommit\b/.test(prompt)) { try { execFileSync('git', ['commit', '--allow-empty', '-q', '-m', 'fake live turn'], { stdio: 'ignore' }); } catch { /* no repo */ } }
+        if (/\bcommit\b/.test(prompt)) { try { execFileSync('git', ['-c', 'user.name=fake', '-c', 'user.email=fake@agora.invalid', 'commit', '--allow-empty', '-q', '-m', 'fake live turn'], { stdio: ['ignore', 'ignore', 'pipe'] }); } catch (err) { log('.fake-live-git.log', String(err.stderr ?? err).slice(0, 300)); } }
         if (pushed) {
             const channel = /channel_id="([^"]+)"/.exec(prompt)?.[1];
             await callTool('chat_send', { channel, message: 'fake-claude reply' });

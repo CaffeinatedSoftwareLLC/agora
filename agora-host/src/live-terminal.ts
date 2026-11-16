@@ -199,13 +199,22 @@ export class LiveManager {
             r.paceTimer = setTimeout(() => { r.paceTimer = null; r.pty?.resume(); }, ms);
             r.paceTimer.unref?.();
         });
+        // (Running sessions are announced once Agora's first `live:desired` of this connection has arrived:
+        // before that it does not yet know them, and would ignore what is said about them.)
+        this.announced = null;
+    }
+    detach(): void { this.socket = null; this.announced = null; }
+
+    private announced: LiveTransport | null = null;
+    private announce(): void {
+        if (!this.socket || this.announced === this.socket) return;
+        this.announced = this.socket;
         for (const r of this.runs.values()) {
             this.send('live:state', { sessionId: r.spec.sessionId, state: r.state, note: r.note });
             const snap = r.ring.snapshot();
             if (snap.length) this.send('live:replay', { sessionId: r.spec.sessionId, data: snap });
         }
     }
-    detach(): void { this.socket = null; }
 
     private send(event: string, payload: unknown): void { if (this.socket?.connected) this.socket.emit(event, payload); }
 
@@ -239,7 +248,7 @@ export class LiveManager {
             run.confirmed = await this.loadConfirmed(spec);
             this.runs.set(spec.sessionId, run);
             await this.launch(run);
-        }
+        }        this.announce();
     }
 
     async stop(id: string): Promise<void> {

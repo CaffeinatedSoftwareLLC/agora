@@ -45,6 +45,8 @@ export const LIVE_RATE_BYTES = 2 * 1024 * 1024;
 const intEnv = (name: string, fallback: number) => { const v = Number(process.env[name]); return Number.isFinite(v) && v >= 0 ? v : fallback; };
 /** The owner's keyboard counts as "having the controls" this long after the last keystroke. */
 export const controlIdleMs = () => intEnv('AGORA_LIVE_CONTROL_IDLE_MS', 20_000);
+/** How often the viewers' access is checked again (a role removed while watching ends the watching) */
+const accessRecheckMs = () => intEnv('AGORA_LIVE_ACCESS_RECHECK_MS', 15_000);
 const syncMs = () => intEnv('AGORA_LIVE_SYNC_MS', 3_000);
 /** A session with a connected host but no channel connection after this long is reported. */
 const channelGraceMs = () => intEnv('AGORA_LIVE_CHANNEL_GRACE_MS', 90_000);
@@ -115,6 +117,7 @@ export class LiveHub {
     private sessions = new Map<string, Sess>();
     private timer: ReturnType<typeof setInterval> | null = null;
     private holdTimer: ReturnType<typeof setInterval> | null = null;
+    private lastAccessCheckMs = 0;
     private pending = new Set<Promise<unknown>>();
     /** Counted, never logged: events from a viewer that may not send them, and handshakes refused. */
     deniedInput = 0;
@@ -504,6 +507,8 @@ export class LiveHub {
             this.applyHold(s);
         }
         // Viewers' access is re-checked now and then
+        if (now - this.lastAccessCheckMs < accessRecheckMs()) return;
+        this.lastAccessCheckMs = now;
         for (const s of this.sessions.values()) {
             for (const [id, v] of [...s.viewers]) {
                 const still = await viewerRole(this.db, s.sessionId, v.info.userId).catch(() => null);

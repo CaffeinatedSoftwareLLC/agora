@@ -18,6 +18,7 @@ const EDGE_SECRET = '35'.repeat(32);
 process.env.AGORA_EDGE_SECRET = EDGE_SECRET;
 process.env.AGORA_LIVE_CONTROL_IDLE_MS = '400';
 process.env.AGORA_LIVE_CHANNEL_GRACE_MS = '0';
+process.env.AGORA_LIVE_ACCESS_RECHECK_MS = '0';
 const PASSWORD = 'TestPass123!';
 const SHA1 = 'a'.repeat(40), SHA2 = 'b'.repeat(40);
 
