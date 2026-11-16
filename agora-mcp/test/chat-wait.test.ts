@@ -158,3 +158,21 @@ describe('chat_wait', () => {
         expect(sendNotification).not.toHaveBeenCalled();
     });
 });
+
+describe('chat_wait in a live-terminal session', () => {
+    it('returns at once, saying that messages are pushed, and never reads the channel', async () => {
+        const getMe = vi.fn();
+        const api = { getMe } as unknown as AgoraApi;
+        const handlers = new Map<string, Handler>();
+        const server = { tool: (name: string, ...rest: unknown[]) => handlers.set(name, rest[rest.length - 1] as Handler) };
+        registerTools(server as never, api, new CursorTracker(api), { defaultChannel: 'general', liveSession: 'L'.repeat(26) });
+        const started = Date.now();
+        const out: any = await handlers.get('chat_wait')!({ timeout: 30 }, { signal: new AbortController().signal, sendNotification: vi.fn(), _meta: undefined });
+        expect(Date.now() - started).toBeLessThan(500);
+        expect(out.content[0].text).toMatch(/live session: messages are pushed to you; do not wait/);
+        expect(getMe).not.toHaveBeenCalled();
+        // chat_read and chat_send are still registered
+        expect(handlers.has('chat_read')).toBe(true);
+        expect(handlers.has('chat_send')).toBe(true);
+    });
+});

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../../lib/api';
-import { classifyCommandError, compactTokens, deriveChips, describeSession, NO_AUTHORITY, type AgentSession } from './agentSessions';
+import { classifyCommandError, compactTokens, deriveChips, describeSession, NO_AUTHORITY, ownSessionChips, type AgentSession } from './agentSessions';
 
 const s = (over: Partial<AgentSession>): AgentSession => ({
   id: 'S'.repeat(26), profile: 'codex', botUsername: 'codex', state: 'live', endReason: null,
@@ -16,6 +16,22 @@ describe('compactTokens', () => {
     [999_499, '999k'], [1_250_000, '1.3M'], [12_000_000, '12M'],
   ])('%d → %s', (n, out) => {
     expect(compactTokens(n)).toBe(out);
+  });
+});
+
+describe('live terminal sessions', () => {
+  const live = (over: Partial<AgentSession> = {}) => s({ liveMode: true, kind: 'hosted', botId: 'B'.repeat(26), ...over });
+  it('take their state from what the box reports, not from runs, and are never on standby behind their own terminal', () => {
+    const terminal = s({ id: 't', kind: 'terminal', botId: 'B'.repeat(26), profile: 'cc', botUsername: 'cc' });
+    for (const [liveState, chip] of [['working', 'working'], ['waiting', 'waiting'], ['idle', 'idle'], ['stopped', 'idle'], ['restarting', 'idle'], [null, 'idle']] as const) {
+      expect(deriveChips([live({ liveState }), terminal])[0].state, String(liveState)).toBe(chip);
+    }
+  });
+  it('do not also show a second, dashed chip for the agent own CLI', () => {
+    const terminal = s({ id: 't', kind: 'terminal', botId: 'B'.repeat(26), profile: 'cc', botUsername: 'cc' });
+    const present = [{ userId: 'B'.repeat(26), username: 'cc', status: 'listening' as const, mode: 'channel' as const }];
+    expect(ownSessionChips(present, [live(), terminal])).toEqual([]);
+    expect(ownSessionChips(present, [s({ botId: 'B'.repeat(26) }), terminal])).toHaveLength(1);
   });
 });
 

@@ -27,6 +27,8 @@ export interface Profile {
   toolPresets?: string[]; allowedTools?: string[];
   /** Show the agent's live text and steps in the channel while it runs (docs/live-output.md); on unless false. */
   showLiveOutput?: boolean;
+  /** "runs": a headless process per wake, token budgets apply (default). "live": its own interactive CLI in a terminal in its box (docs/planning/live-terminals.md). */
+  sessionMode?: 'runs' | 'live';
   /** Reported by the host at start (docs/provider-terms.md); subscription until then. */
   authMode?: 'subscription' | 'api_key' | 'siwc'; apiKeyEnv?: string | null; runApproval?: boolean; authReportedAt?: string | null;
   /** 'siwc' only: whose ChatGPT plan it runs on (docs/codex-chatgpt-plan.md). */
@@ -435,6 +437,25 @@ export function ProfileRow({ serverId, profile, host, plan, onChange, onError }:
           A change applies to this agent's existing sessions at once. A session a limit already stopped stays shelved until you resume it.
         </p>
       </section>
+      {profile.boxed && profile.adapter === 'claude' && (
+        <fieldset className="mt-2 text-sm text-text" data-testid={`session-mode-${profile.name}`}>
+          <legend className="text-xs font-semibold uppercase tracking-wide text-text-muted">How it works</legend>
+          {([
+            ['runs', 'Per-wake runs', 'A fresh headless process for each wake. Token and run-time budgets apply.'],
+            ['live', 'Live terminal', 'Its normal interactive CLI runs in a terminal in its box, and you can watch it and type into it from the web. Chat messages reach it as Channel pushes. Token budgets need per-wake runs: tokens are not measured in this mode. Task-card and subtask work of this agent still runs as per-wake runs, in its own worktree session, with the budgets above. Claude Code only, and the Channel is a research preview Anthropic may change.'],
+          ] as const).map(([value, label, detail]) => (
+            <label key={value} className="flex min-h-11 items-start gap-2">
+              <input type="radio" className="mt-1" name={`session-mode-${profile.id}`} aria-label={`${label} for ${profile.name}`}
+                checked={(profile.sessionMode ?? 'runs') === value}
+                onChange={() => void (async () => {
+                  try { await api.patch(`/servers/${serverId}/agent-profiles/${profile.id}`, { sessionMode: value }); onChange(); }
+                  catch (err) { onError(err instanceof ApiError && err.code === 'end_sessions_before_changing_mode' ? 'End its sessions before changing how it works.' : errorText(err)); }
+                })()} />
+              <span>{label}<span className="block text-xs text-text-muted">{detail}</span></span>
+            </label>
+          ))}
+        </fieldset>
+      )}
       <label className="mt-2 flex min-h-11 items-start gap-2 text-sm text-text" data-testid={`live-output-${profile.name}`}>
         <input type="checkbox" className="mt-1" aria-label={`Show live output for ${profile.name}`} checked={profile.showLiveOutput !== false}
           onChange={e => void (async () => {

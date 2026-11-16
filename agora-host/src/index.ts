@@ -11,6 +11,7 @@ import { creditLine } from './openrouter.js';
 import { boxConfigCommand, inBox } from './box.js';
 import { boxRelayCommand } from './box-shell.js';
 import { runAsAgentServer } from './box-as-agent.js';
+import { liveLoop } from './live-terminal.js';
 import { devinCommand } from './devin.js';
 
 async function main() {
@@ -45,6 +46,8 @@ async function main() {
     // process of another user (box-relay), so nothing of the terminal passes through the agent's host.
     const shell = new AbortController();
     void runAsAgentServer(config, { signal: shell.signal, log: code => console.error(code) }).catch(() => console.error('as_agent_loop_failed'));
+    // Live terminals (docs/planning/live-terminals.md): box mode only; the agent's own interactive CLI, owned by this process
+    void liveLoop({ instance: config.instance, token: config.hostToken, config, signal: shell.signal, enabled: s => client.liveEnabled(s), log: code => console.error(code) }).catch(() => console.error('live_loop_failed'));
     process.once('SIGINT', () => { shell.abort(); void scheduler.stop(); });
     process.once('SIGTERM', () => { shell.abort(); void scheduler.stop(); });
     try { await scheduler.run(); } finally {

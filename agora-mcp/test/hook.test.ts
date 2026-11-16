@@ -134,6 +134,13 @@ describe('the state file agora-mcp leaves for the hooks', () => {
         expect(isClaudeClient('claudette')).toBe(false);
     });
 
+    it('writes no token to the disk for a hosted CLI (AGORA_HOOKS=off), as an agent live terminal in its box is', async () => {
+        const config = { instance: 'http://agora.test', token: 'bot_a.secret' };
+        expect(startHookState(config, () => 'claude-code', { CLAUDE_PROJECT_DIR: project, AGORA_HOOKS: 'off' }, stateDir)).toBeUndefined();
+        expect(startHookState(config, () => 'claude-code', { CLAUDE_PROJECT_DIR: project, AGORA_HOOKS: ' OFF ' }, stateDir)).toBeUndefined();
+        expect(findHookStates([project], () => true, stateDir)).toEqual([]);
+    });
+
     it('is found from CLAUDE_PROJECT_DIR first, then the cwd and its parents; stale or broken files are skipped', async () => {
         await writeHookState(serverState(), stateDir);
         const deps = (over: Partial<HookDeps> = {}): HookDeps => ({ env: {}, fetch, stateDir, isRunning: () => true, ...over });

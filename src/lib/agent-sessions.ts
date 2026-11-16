@@ -95,7 +95,11 @@ interface LiveSession {
      * host's, box's or model agent's).
      */
     tokenMintedBy: string | null;
+    /** Terminal only: the purpose of the token that opened it ('box' for a box's own CLI). */
+    tokenPurpose?: string | null;
     names: string[];
+    /** A live-terminal session: its pushes are sent by the live hub from the inbox rows routing writes. */
+    live?: boolean;
     lurkMode: string | null;
     profileName: string;
     /** Runs on someone's personal plan ('subscription' or 'siwc'): plan-owner wakes only. */
@@ -170,7 +174,7 @@ export async function asService<T>(client: any, fn: () => Promise<T>): Promise<T
  */
 async function liveSessions(db: any, channelId: string, threadId: string | null = null): Promise<LiveSession[]> {
     const rows = await db.query(
-        `SELECT s.id, s.bot_id, s.lurk_mode, s.started_by, u.username, p.name AS profile_name, ${WAKE_AUTH_SQL} AS auth_mode,
+        `SELECT s.id, s.bot_id, s.lurk_mode, s.started_by, s.live_mode, u.username, p.name AS profile_name, ${WAKE_AUTH_SQL} AS auth_mode,
                 ${PLAN_OWNER_SQL} AS plan_owner_id,
                 (s.started_by IS NOT NULL AND s.started_by = ${PLAN_OWNER_SQL}) AS started_by_owner
          FROM agent_sessions s
@@ -184,6 +188,7 @@ async function liveSessions(db: any, channelId: string, threadId: string | null 
     return rows.rows.map((r: any) => ({
         id: r.id.trim(),
         kind: 'hosted' as const,
+        live: !!r.live_mode,
         botId: r.bot_id.trim(),
         botOwnerId: null,
         tokenId: null,
@@ -208,6 +213,7 @@ async function terminalSessions(db: any, channelId: string): Promise<LiveSession
     const rows = await db.query(
         `SELECT s.id, s.bot_id, s.started_by, s.token_id, u.username, u.bot_owner_id,
                 CASE WHEN t.revoked_at IS NULL AND t.purpose IN ('personal', 'invite') THEN t.created_by END AS token_minted_by,
+                CASE WHEN t.revoked_at IS NULL THEN t.purpose END AS token_purpose,
                 ARRAY(SELECT p.name FROM agent_profiles p WHERE p.bot_id = s.bot_id AND p.server_id = s.server_id) AS profile_names
          FROM agent_sessions s
          JOIN users u ON u.id = s.bot_id
@@ -223,6 +229,7 @@ async function terminalSessions(db: any, channelId: string): Promise<LiveSession
         botOwnerId: r.bot_owner_id?.trim() ?? null,
         tokenId: r.token_id?.trim() ?? null,
         tokenMintedBy: r.token_minted_by?.trim() ?? null,
+        tokenPurpose: r.token_purpose ?? null,
         lurkMode: null,
         names: [String(r.username).toLowerCase(), ...(r.profile_names ?? []).map((n: string) => String(n).toLowerCase())],
         profileName: r.username,
@@ -391,9 +398,13 @@ interface Built {
 async function buildContext(db: any, msg: RoutedMessage): Promise<Built> {
     const authorId = msg.authorId.trim();
     // Single responder: an agent connected from a terminal answers there, not through its hosted session
-    const terminals = await terminalSessions(db, msg.channelId);
-    const terminalBots = new Set<string>(terminals.map(s => s.botId));
     const all = await liveSessions(db, msg.channelId);
+    // The CLI of a live-terminal session (migration 104) is that session's own, not a user's terminal competing
+    // with it: the session takes part in routing like any hosted one, and the server tells its Channel what to push
+    // Only that CLI's own presence (a terminal session opened with the box's token) is dropped: a terminal a person runs for the same
+    // bot, and a live CLI's presence in a channel where it has no live session (which would silence the "nothing woke it" notices), are not
+    const terminals = (await terminalSessions(db, msg.channelId)).filter(t => t.tokenPurpose !== 'box');
+    const terminalBots = new Set<string>(terminals.map(s => s.botId));
     const standby = all.filter(s => terminalBots.has(s.botId));
     const sessions = all.filter(s => !terminalBots.has(s.botId));
     // An agent writing from its terminal is that terminal session (its hosted one is on
@@ -614,7 +625,8 @@ async function botMentionNotices(db: any, msg: RoutedMessage, ctx: RouteContext,
                    WHERE s.channel_id = $2 AND s.bot_id = p.bot_id AND s.profile_id = p.id AND s.state = 'shelved' AND s.thread_id IS NULL
                    ORDER BY s.last_active_at DESC LIMIT 1) x) AS shelved,
                 EXISTS (SELECT 1 FROM agent_sessions s WHERE s.channel_id = $2 AND s.bot_id = p.bot_id AND s.state = 'live'
-                        AND (s.thread_id IS NULL OR s.thread_id = $4)) AS live,
+                        AND (s.thread_id IS NULL OR s.thread_id = $4)
+                        AND NOT (s.kind = 'terminal' AND s.token_id IN (SELECT id FROM bot_tokens WHERE purpose = 'box'))) AS live,
                 EXISTS (SELECT 1 FROM agent_inbox i JOIN agent_sessions s ON s.id = i.session_id
                         WHERE i.message_id = $3 AND s.bot_id = p.bot_id) AS woken
          FROM agent_profiles p JOIN users u ON u.id = p.bot_id JOIN channels c ON c.id = $2 AND c.server_id = p.server_id
@@ -673,7 +685,9 @@ async function unreachable(db: any, msg: RoutedMessage, authorId: string, termin
                            WHERE i.message_id = $3 AND s.bot_id = p.bot_id)
            AND NOT EXISTS (SELECT 1 FROM agent_sessions s
                            WHERE s.bot_id = p.bot_id AND s.channel_id = $2 AND s.state = 'live'
-                             AND (s.thread_id IS NULL OR s.thread_id = $4))
+                             AND (s.thread_id IS NULL OR s.thread_id = $4)
+                             -- (a live CLI's own presence, opened with its box's token, is not a session that hears the message)
+                             AND NOT (s.kind = 'terminal' AND s.token_id IN (SELECT id FROM bot_tokens WHERE purpose = 'box')))
          ORDER BY p.bot_id, p.name`,
         [ids, msg.channelId, msg.messageId, msg.threadId]
     );

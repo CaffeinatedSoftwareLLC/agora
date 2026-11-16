@@ -23,3 +23,17 @@ export function createShellSocket(ticket: string): Socket {
     auth: { type: 'shell', ticket },
   });
 }
+
+// The live terminal's own connection (docs/planning/live-terminals.md): the same cookie, plus the
+// session to watch. The hub decides from the cookie whether this person may watch, and whether
+// they may type. Its own socket, like the shell's.
+export function createLiveSocket(sessionId: string): Socket {
+  return io('/', {
+    transports: ['websocket'],
+    withCredentials: true,
+    autoConnect: false,
+    reconnection: false,
+    forceNew: true,
+    auth: { type: 'live-view', sessionId },
+  });
+}

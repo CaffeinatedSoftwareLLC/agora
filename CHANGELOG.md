@@ -4,6 +4,10 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
+### Added
+
+- **Live terminals, first slice ([docs/planning/live-terminals.md](docs/planning/live-terminals.md)).** A boxed Claude Code agent can run its normal interactive CLI in a long-lived terminal in its box (Settings → Agents → "How it works" → Live terminal; per-wake runs stay the default). The server owner can watch it and, after a confirmation, type into it from the web app, on a phone too; people who can direct agents in the channel can watch, read-only. Chat messages reach the agent through the Claude Code Channel, never as typed keys, and are held while the owner has the keyboard. Token budgets do not apply in this mode (tokens are not measured). Migration 104; box image version 8, so boxes restart once on upgrade.
+
 ## 0.4.3 — 2026-11-15
 
 Two fixes. **Boxes upgrade by themselves again:** after upgrading to 0.4.2, a box made by an older release was refused with "the container differs from what boxd created" and had to be rebuilt by hand; it now upgrades on its own, and boxes already stuck that way recover. **Your own bots can wake your agents:** a bot on a personal token you made acts with your authority (a switch per bot), refusals name the real cause and the fix, the fixed 8-turn cap is gone, and a session with no recorded starter becomes yours when you wake it.

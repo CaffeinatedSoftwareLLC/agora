@@ -96,6 +96,15 @@ export const needsPasteConfirm = (text: string, bracketedPaste: boolean) => !bra
 
 /** The browser events that count as the owner doing something (as opposed to the widget answering the shell). */
 export const GESTURE_EVENTS = ['keydown', 'beforeinput', 'input', 'compositionend', 'paste', 'mousedown', 'pointerdown', 'wheel', 'touchstart'] as const;
+/**
+ * What counts as typing on the live terminal page (the agent's terminal): keys, composition, paste. Not the mouse, pointer, wheel or
+ * touch: those would let the agent's screen, by switching on a mouse mode, have this page send it bytes on a mere click.
+ */
+export const LIVE_GESTURE_EVENTS = ['keydown', 'beforeinput', 'input', 'compositionend', 'paste'] as const;
+/** Mouse and focus reports a terminal program can switch on: never passed to the agent's terminal. */
+// eslint-disable-next-line no-control-regex
+export const isTerminalReport = (data: string) => /^\[(?:M|<[\d;]+[Mm]|[IO]$)/.test(data);
+
 /** Terminal data this soon after such an event is the owner's; later data is the widget's own reply. */
 export const GESTURE_WINDOW_MS = 150;
 

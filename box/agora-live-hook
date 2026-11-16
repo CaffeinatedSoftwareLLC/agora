@@ -1,0 +1,55 @@
+#!/usr/bin/python3 -I
+"""agora-live-hook: hands one Claude Code hook event to the agent's agora-host (docs/planning/live-terminals.md).
+
+    agora-live-hook EVENT          (the hook's JSON arrives on stdin)
+
+Claude Code runs this for SessionStart, UserPromptSubmit, PreToolUse, Notification, Stop and SessionEnd
+in a live-terminal session (agora-host writes the settings file that names it). It writes one line of
+JSON to the Unix socket named by AGORA_LIVE_HOOK_SOCK, a socket in /run/agora (mode 0700, the agent's
+own) that agora-host listens on, and exits 0 whatever happens: a hook must never be able to stop or
+slow the CLI. Only what agora-host reads is passed on: the prompt's first 4000 characters for
+UserPromptSubmit (to see whether it arrived as an Agora Channel push) and the type of a Notification.
+Nothing else of the hook's input leaves this process, and nothing is logged.
+"""
+import json
+import os
+import socket
+import sys
+
+EVENTS = ('SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Notification', 'Stop', 'SessionEnd')
+MAX_STDIN = 1 << 20
+
+
+def main(argv):
+    event = argv[1] if len(argv) > 1 else ''
+    path = os.environ.get('AGORA_LIVE_HOOK_SOCK', '')
+    if event not in EVENTS or not path:
+        return 0
+    try:
+        data = json.loads(sys.stdin.buffer.read(MAX_STDIN) or b'{}')
+    except (ValueError, OSError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    payload = {}
+    if event == 'UserPromptSubmit' and isinstance(data.get('prompt'), str):
+        payload['prompt'] = data['prompt'][:4000]
+    if event == 'Notification' and isinstance(data.get('notification_type'), str):
+        payload['notification_type'] = data['notification_type'][:60]
+    line = json.dumps({'event': event, 'payload': payload}) + '\n'
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(2.0)
+        s.connect(path)
+        s.sendall(line.encode())
+        s.close()
+    except OSError:
+        pass
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main(sys.argv))
+    except BaseException:   # noqa: BLE001 - never fail the CLI
+        sys.exit(0)

@@ -70,6 +70,8 @@ function profileJson(r: any) {
         hostMode: !!r.host_mode, boxed: !!r.boxed,
         // "Show live output": the channel sees this agent's text and steps while it runs (docs/live-output.md)
         showLiveOutput: r.show_live_output !== false,
+        // "runs": a headless process per wake (token budgets apply); "live": the agent's own interactive CLI in a terminal (docs/planning/live-terminals.md)
+        sessionMode: r.session_mode === 'live' ? 'live' : 'runs',
     };
 }
 
@@ -105,6 +107,7 @@ const profileFields = {
     allowedTools: allowedToolsSchema,
     // Show the agent's live text and steps in the channel while it runs (default on)
     showLiveOutput: { type: 'boolean' },
+    sessionMode: { type: 'string', enum: ['runs', 'live'] },
     hostModeAck,
 } as const;
 
@@ -132,7 +135,7 @@ async function checkRefs(db: any, serverId: string, botId?: string, hostId?: str
 
 const BOX_PROFILE = 'This profile belongs to a box; change it in the box settings';
 /** What Settings → Agents may still change on a box's profile: its session limits. */
-const BOX_PROFILE_FIELDS: ReadonlySet<string> = new Set(['wakeBudget', 'tokenBudget', 'runTimeoutSec', 'showLiveOutput']);
+const BOX_PROFILE_FIELDS: ReadonlySet<string> = new Set(['wakeBudget', 'tokenBudget', 'runTimeoutSec', 'showLiveOutput', 'sessionMode']);
 async function isBoxProfile(db: any, profileId: string): Promise<boolean> {
     return (await db.query(`SELECT 1 FROM agent_boxes WHERE profile_id = $1`, [profileId])).rows.length > 0;
 }
@@ -294,6 +297,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
         // A duplicate name aborts the INSERT; asService rolls back to its savepoint, so catch outside it
         try {
             const result = await asService(db, async () => {
+                if (b.sessionMode === 'live') return { status: 409, body: { error: 'live_terminal_boxed_claude_only' } };
                 const bad = await checkRefs(db, serverId, b.botId, b.hostId);
                 if (bad) return { status: 400, body: { error: bad } };
                 const row = await db.query(
@@ -360,6 +364,15 @@ export async function agentHostRoutes(app: FastifyInstance) {
                 const used = await db.query(`SELECT 1 FROM agent_sessions WHERE profile_id = $1 AND state <> 'ended' LIMIT 1`, [profileId]);
                 if (used.rows.length) return { status: 409, body: { error: 'End this profile\'s sessions before changing its workspace' } };
             }
+            if (b.sessionMode !== undefined && b.sessionMode !== (p.session_mode ?? 'runs')) {
+                // Live terminals: boxed Claude Code only, and not while a session is live (it would change under the CLI)
+                if (b.sessionMode === 'live') {
+                    const box = await db.query(`SELECT 1 FROM agent_boxes WHERE profile_id = $1 AND deleted_at IS NULL`, [profileId]);
+                    if (!box.rows.length || (b.adapter ?? p.adapter) !== 'claude') return { status: 409, body: { error: 'live_terminal_boxed_claude_only' } };
+                }
+                const used = await db.query(`SELECT 1 FROM agent_sessions WHERE profile_id = $1 AND state = 'live' AND kind = 'hosted' LIMIT 1`, [profileId]);
+                if (used.rows.length) return { status: 409, body: { error: 'end_sessions_before_changing_mode' } };
+            }
             const bad = await checkRefs(db, serverId, b.botId, b.hostId);
             if (bad) return { status: 400, body: { error: bad } };
             if (missingModel(b.adapter ?? p.adapter, 'model' in b ? b.model : p.model)) return { status: 400, body: { error: OPENCODE_MODEL_REQUIRED } };
@@ -388,6 +401,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
                         token_budget = CASE WHEN $23::boolean THEN $13 ELSE token_budget END,
                         run_timeout_sec = CASE WHEN $24::boolean THEN $14 ELSE run_timeout_sec END,
                         show_live_output = COALESCE($25, show_live_output),
+                        session_mode = COALESCE($26, session_mode),
                         generation = generation + CASE WHEN $15::boolean THEN 1 ELSE 0 END,
                         tool_presets = COALESCE($17, tool_presets), allowed_tools = COALESCE($18, allowed_tools),
                         host_mode = host_mode OR $19::boolean,
@@ -399,7 +413,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
                      'model' in b, b.model ?? null, 'effort' in b, b.effort ?? null, b.workdirAlias ?? null,
                      b.wakeBudget ?? null, b.tokenBudget ?? null, b.runTimeoutSec ?? null, incompatible, b.workspaceId ?? null,
                      b.toolPresets ?? null, b.allowedTools ?? null, b.hostModeAck === true, request.userId, moved,
-                     'wakeBudget' in b, 'tokenBudget' in b, 'runTimeoutSec' in b, b.showLiveOutput ?? null]
+                     'wakeBudget' in b, 'tokenBudget' in b, 'runTimeoutSec' in b, b.showLiveOutput ?? null, b.sessionMode ?? null]
                 );
                 // A profile's limits reach its sessions: the wake and run time limits are read from the
                 // profile at every wake. A session's own token limit (set on its card, or given to a
@@ -411,6 +425,16 @@ export async function agentHostRoutes(app: FastifyInstance) {
                          WHERE profile_id = $1 AND state <> 'ended' AND token_budget IS NOT NULL AND ($2::bigint IS NULL OR token_budget <= $2)`,
                         [profileId, b.tokenBudget]
                     );
+                }
+                // A shelved session picks up the new mode when it is resumed
+                if (b.sessionMode !== undefined && b.sessionMode !== (p.session_mode ?? 'runs')) {
+                    // What was already pushed to a live session is finished with: a per-wake claim must never take a pushed message again
+                    await db.query(
+                        `UPDATE agent_inbox SET acked_at = NOW() WHERE acked_at IS NULL AND batch_id IS NULL AND live_sent_at IS NOT NULL
+                         AND session_id IN (SELECT id FROM agent_sessions WHERE profile_id = $1)`, [profileId]);
+                }
+                if (b.sessionMode !== undefined) {
+                    await db.query(`UPDATE agent_sessions SET live_mode = $2 WHERE profile_id = $1 AND state <> 'ended' AND kind = 'hosted' AND thread_id IS NULL`, [profileId, b.sessionMode === 'live']);
                 }
                 if (incompatible) {
                     await db.query(`UPDATE agent_sessions SET native_session_id = NULL WHERE profile_id = $1`, [profileId]);
@@ -587,6 +611,13 @@ export async function agentHostRoutes(app: FastifyInstance) {
         return reply.send({ updated, unknown });
     });
 
+    // GET /agent-hosts/@me/live → { enabled }: does any agent of this host run in live terminal mode? A box's host opens
+    // its live socket only when it does (docs/planning/live-terminals.md); it asks again now and then while it does not.
+    app.get('/agent-hosts/@me/live', async (request, reply) => {
+        const host = request.agentHost!;
+        const row = await request.dbClient!.query(`SELECT 1 FROM agent_profiles WHERE host_id = $1 AND session_mode = 'live' LIMIT 1`, [host.id]);
+        return reply.send({ enabled: row.rows.length > 0 });
+    });
     app.post('/agent-hosts/@me/workspaces/reconcile', {
         schema: { body: { type: 'object', required: ['sessionIds'], properties: {
             sessionIds: { type: 'array', maxItems: 100, items: ID },

@@ -312,3 +312,119 @@ describe('--no-permission-relay (S0506)', () => {
         await client.close();
     });
 });
+
+describe('live terminal mode: the server routes, the Channel only carries', () => {
+    const SESSION = 'L'.repeat(26);
+    const OTHER_SESSION = 'X'.repeat(26);
+    function live(over: Partial<ChannelApi> = {}) {
+        const api = fakeApi(over);
+        const sent: Notification[] = [];
+        const acks: Array<{ sessionId: string; messageId: string }> = [];
+        const socket = new EventEmitter();
+        const channel = new AgoraChannel({ api, auth: 'subscription', liveSession: SESSION, notify: async x => { sent.push(x); } });
+        channel.attach({ on: (e, h) => socket.on(e, h), emit: (e: string, p: any) => { if (e === 'LiveAck') acks.push(p); return true; }, disconnect: () => {} });
+        return { api, sent, acks, socket, channel };
+    }
+    const delivery = (over: any = {}) => {
+        const m = msg({ authorAuthority: undefined, ...(over.message ?? {}) });
+        return { sessionId: SESSION, channelId: CH, channelName: 'general', authority: 'owner', message: { id: m.id, content: m.content, channelId: CH, authorId: OWNER, authorUsername: 'eryk', authorBot: false, threadId: null, createdAt: m.createdAt }, ...over, ...(over.message ? { message: { id: m.id, content: m.content, channelId: CH, authorId: OWNER, authorUsername: 'eryk', authorBot: false, threadId: null, createdAt: m.createdAt, ...over.message } } : {}) };
+    };
+
+    it('pushes exactly what the server marked for its own session, and acknowledges it afterwards', async () => {
+        const { channel, sent, acks } = live();
+        const d = delivery();
+        expect(await channel.onLiveDeliver(d, a => acks.push(a))).toBe(true);
+        expect(sent).toHaveLength(1);
+        expect(sent[0].method).toBe(CHANNEL_NOTIFICATION);
+        expect(sent[0].params.content).toBe(d.message.content);
+        expect((sent[0].params.meta as any)).toMatchObject({ message_id: d.message.id, channel_id: CH, authority: 'owner' });
+        expect(acks).toEqual([{ sessionId: SESSION, messageId: d.message.id }]);
+    });
+
+    it('ignores every chat event: an owner message in any channel does not reach the CLI by itself', async () => {
+        const { channel, sent, socket } = live();
+        await channel.onReady({ botId: SELF, channels: [CH] });
+        socket.emit('Message', msg());
+        expect(await channel.onMessage(msg())).toBe(false);
+        await new Promise(r => setTimeout(r, 10));
+        expect(sent).toHaveLength(0);
+    });
+
+    it('ignores a delivery for another session of the same bot, and malformed ones', async () => {
+        const { channel, sent, acks } = live();
+        const ack = (a: any) => acks.push(a);
+        expect(await channel.onLiveDeliver(delivery({ sessionId: OTHER_SESSION }), ack)).toBe(false);
+        expect(await channel.onLiveDeliver(delivery({ authority: 'member' }), ack)).toBe(false);
+        expect(await channel.onLiveDeliver(delivery({ message: { channelId: 'D'.repeat(26) } }), ack)).toBe(false);
+        expect(await channel.onLiveDeliver(delivery({ message: { content: '  ' } }), ack)).toBe(false);
+        expect(await channel.onLiveDeliver({ sessionId: SESSION } as any, ack)).toBe(false);
+        expect(sent).toHaveLength(0);
+        expect(acks).toEqual([]);
+    });
+
+    it('does not push a message twice in one process, but acknowledges the repeat (the first ack may have been lost)', async () => {
+        const { channel, sent, acks } = live();
+        const d = delivery();
+        await channel.onLiveDeliver(d, a => acks.push(a));
+        await channel.onLiveDeliver(d, a => acks.push(a));
+        expect(sent).toHaveLength(1);
+        expect(acks).toHaveLength(2);
+    });
+
+    it('does not acknowledge a push that failed, so the server sends it again', async () => {
+        const { api } = live();
+        let fail = true;
+        const sent: Notification[] = [];
+        const channel = new AgoraChannel({ api, auth: 'subscription', liveSession: SESSION, notify: async x => { if (fail) throw new Error('closed'); sent.push(x); } });
+        const acks: any[] = [];
+        const d = delivery();
+        await expect(channel.onLiveDeliver(d, a => acks.push(a))).rejects.toThrow();
+        expect(acks).toEqual([]);
+        fail = false;
+        await channel.onLiveDeliver(d, a => acks.push(a));
+        expect(sent).toHaveLength(1);
+        expect(acks).toHaveLength(1);
+    });
+
+    it('says hello with its session id on every connection, so the server can replay what it holds', () => {
+        const hellos: any[] = [];
+        const socket = new EventEmitter();
+        const channel = new AgoraChannel({ api: fakeApi(), auth: 'subscription', liveSession: SESSION, notify: async () => {} });
+        channel.attach({ on: (e, h) => socket.on(e, h), emit: (e: string, p: any) => { if (e === 'LiveHello') hellos.push(p); return true; }, disconnect: () => {} });
+        socket.emit('connect');
+        socket.emit('connect');
+        expect(hellos).toEqual([{ sessionId: SESSION }, { sessionId: SESSION }]);
+    });
+
+    it('marks the owner own bot and a server notice the way the per-wake prompt does', async () => {
+        const { channel, sent, acks } = live();
+        await channel.onLiveDeliver(delivery({ authority: 'director', ownerBot: true, ownerBotDirect: true }), a => acks.push(a));
+        expect((sent[0].params.meta as any)).toMatchObject({ authority: 'director', owner_bot: 'true' });
+        await channel.onLiveDeliver(delivery({ authority: 'system', reason: 'command' }), a => acks.push(a));
+        expect((sent[1].params.meta as any)).toMatchObject({ authority: 'system', kind: 'command' });
+        expect((sent[1].params.meta as any).owner_bot).toBeUndefined();
+    });
+
+    it('a server socket event drives it end to end', async () => {
+        const { sent, acks, socket } = live();
+        socket.emit('LiveDeliver', delivery());
+        await vi.waitFor(() => expect(acks).toHaveLength(1));
+        expect(sent).toHaveLength(1);
+    });
+
+    it('catches nothing up from chat on a reconnect', async () => {
+        const { api, sent, channel } = live();
+        await channel.onReady({ botId: SELF, channels: [CH] });
+        api.history.push(msg());
+        await channel.onReady({ botId: SELF, channels: [CH] });
+        expect(api.getMessages).not.toHaveBeenCalled();
+        expect(sent).toHaveLength(0);
+    });
+
+    it('a process that is not a live session does not know the live event', async () => {
+        const { sent, socket } = setup();
+        socket.emit('LiveDeliver', delivery());
+        await new Promise(r => setTimeout(r, 10));
+        expect(sent).toHaveLength(0);
+    });
+});

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { api, serverApi } from '../../lib/api';
+import { api, ApiError, serverApi } from '../../lib/api';
 import { useServerStore } from '../../stores/serverStore';
 import { AgentSessionsSettings, SubscriptionWakesSection } from './AgentSessionsSettings';
 
@@ -124,6 +124,40 @@ describe('Show live output (docs/live-output.md)', () => {
     profiles({}, { showLiveOutput: false, boxed: true });
     render(<AgentSessionsSettings />);
     expect(await screen.findByRole('checkbox', { name: 'Show live output for claude' })).not.toBeChecked();
+  });
+});
+
+describe('How it works (live terminals, docs/planning/live-terminals.md)', () => {
+  it('is offered for boxed Claude Code only, says that token budgets need per-wake runs, and saves at once', async () => {
+    profiles({}, { boxed: true, adapter: 'claude', sessionMode: 'runs' });
+    const patch = vi.spyOn(api, 'patch').mockResolvedValue({});
+    render(<AgentSessionsSettings />);
+    const live = await screen.findByRole('radio', { name: 'Live terminal for claude' });
+    expect(screen.getByRole('radio', { name: 'Per-wake runs for claude' })).toBeChecked();
+    expect(live).not.toBeChecked();
+    expect(screen.getByTestId('session-mode-claude')).toHaveTextContent('Token budgets need per-wake runs');
+    expect(screen.getByTestId('session-mode-claude')).toHaveTextContent('Task-card and subtask work of this agent still runs as per-wake runs')
+    fireEvent.click(live);
+    await waitFor(() => expect(patch).toHaveBeenCalledWith('/servers/S/agent-profiles/P', { sessionMode: 'live' }));
+  });
+  it('is not offered for an unboxed agent or another CLI', async () => {
+    profiles({}, { boxed: false, adapter: 'claude' });
+    render(<AgentSessionsSettings />);
+    await screen.findByRole('checkbox', { name: 'Show live output for claude' });
+    expect(screen.queryByTestId('session-mode-claude')).toBeNull();
+    cleanup();
+    profiles({}, { boxed: true, adapter: 'codex' });
+    render(<AgentSessionsSettings />);
+    await screen.findByRole('checkbox', { name: 'Show live output for claude' });
+    expect(screen.queryByTestId('session-mode-claude')).toBeNull();
+  });
+  it('shows a profile in live mode as chosen, and says to end its sessions first when the server refuses', async () => {
+    profiles({}, { boxed: true, adapter: 'claude', sessionMode: 'live' });
+    vi.spyOn(api, 'patch').mockRejectedValue(new ApiError(409, 'end_sessions_before_changing_mode'));
+    render(<AgentSessionsSettings />);
+    expect(await screen.findByRole('radio', { name: 'Live terminal for claude' })).toBeChecked();
+    fireEvent.click(screen.getByRole('radio', { name: 'Per-wake runs for claude' }));
+    expect(await screen.findByText(/End its sessions before changing how it works/)).toBeInTheDocument();
   });
 });
 

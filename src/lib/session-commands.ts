@@ -178,6 +178,11 @@ export async function runControl(db: any, input: ControlRequest): Promise<{ outc
         // The same authority as /start, /end and /resume
         if (!input.couldDirect) { await say((await cannotDirect(db, channelId, input.authorId)).message); return result(outcome); }
 
+        // A live-terminal session is driven in its terminal, whether or not its CLI is connected right now
+        const liveTerminal = await db.query(
+            `SELECT 1 FROM agent_sessions WHERE channel_id = $1 AND bot_id = $2 AND state = 'live' AND kind = 'hosted' AND live_mode LIMIT 1`, [channelId, botId]);
+        if (liveTerminal.rows.length) { await say(`${name} runs in a live terminal; ${def.terminal.replace(/ there\.$/, ' in its terminal')} (Open terminal, on its chip or session sheet). Agora does not type into it.`); return result(outcome); }
+
         if (terminal.rows.length) { await say(`${name} is connected from a terminal; ${def.terminal} Agora can't type into your terminal.`); return result(outcome); }
 
         // Its session: one scoped to this thread, else the channel's

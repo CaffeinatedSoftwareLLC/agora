@@ -361,6 +361,8 @@ export function registerTools(
         localFiles?: boolean;
         /** Longest chat_wait, in seconds (default and ceiling MAX_WAIT_SECONDS). */
         maxWaitSeconds?: number;
+        /** A live-terminal session (AGORA_LIVE_SESSION): messages are pushed to it, so chat_wait does not wait. */
+        liveSession?: string;
     },
 ) {
     if (config.activity) server = withActivity(server, config.activity);
@@ -647,6 +649,12 @@ export function registerTools(
             ),
         },
         async ({ channel, timeout, thread, until }, extra) => {
+            // A live-terminal session hears what the server delivers to it as pushes. Waiting here too would show the same message twice
+            // (and keep the agent sitting in a wait). chat_read and chat_send are unchanged: the agent can still read what its bot may read;
+            // only what is PUSHED is an instruction.
+            if (config.liveSession) {
+                return { content: [{ type: 'text' as const, text: 'live session: messages are pushed to you; do not wait. Carry on with your work, and read the channel with chat_read if you need context.' }] };
+            }
             const ch = await resolveChannel(channel);
             const maxWait = Math.min(Math.max(timeout || 30, 1), maxWaitSeconds) * 1000;
             const start = Date.now();
