@@ -49,6 +49,7 @@ import { notificationRoutes } from './routes/notifications';
 import { boxRoutes } from './routes/boxes';
 import { boxHostRoutes } from './routes/box-hosts';
 import { boxTerminalRoutes } from './routes/box-terminal';
+import { liveTerminalRoutes } from './routes/live-terminal';
 import { startNotificationListener } from './lib/notifications';
 import { startAssistantHandler } from './ai/assistant-handler';
 import { startModelAgentHandler } from './ai/model-agent-handler';
@@ -430,6 +431,7 @@ export async function buildApp(opts?: {
     await app.register(boxRoutes);
     await app.register(boxHostRoutes);
     await app.register(boxTerminalRoutes);
+    await app.register(liveTerminalRoutes);
 
     // Setup WebSocket gateway (Socket.IO)
     const io = await setupGateway(app);

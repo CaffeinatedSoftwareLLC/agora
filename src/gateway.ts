@@ -15,6 +15,7 @@ import type { Notice } from './lib/agent-runs';
 import { hopLimitOf } from './lib/agent-budget-notice';
 import { checkProvenance, recordRefusal, type ProvenanceCredential } from './lib/boxes/provenance';
 import { ShellHub, isShellHandshake, setShellHub, shellConnection, shellHandshake } from './lib/boxes/shell-hub';
+import { LiveHub, isLiveHandshake, liveConnection, liveHandshake, setLiveHub } from './lib/boxes/live-hub';
 
 /** How often open human sockets are re-checked against revocation and account state. */
 const SESSION_SWEEP_MS = 5 * 60 * 1000;
@@ -52,6 +53,14 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
     setShellHub(shell);
     void shell.start().catch(() => {});
     app.addHook('onClose', async () => { await shell.stop().catch(() => {}); setShellHub(null); });
+    // Live terminals (src/lib/boxes/live-hub.ts): the agent's own interactive CLI, watched from the web
+    const live = new LiveHub(db, emitNotices, {
+        emitToBot: (botId, event, payload) => { io.to(`user:${botId}`).emit(event, payload); },
+        botChannelConnected: botId => agentPresence.status(botId).mode === 'channel',
+    });
+    setLiveHub(live);
+    void live.start().catch(() => {});
+    app.addHook('onClose', async () => { await live.stop().catch(() => {}); setLiveHub(null); });
     const graceTimers = new Map<string, ReturnType<typeof setTimeout>>();
     const terminalBeat = setInterval(() => {
         void heartbeatTerminals(db, agentPresence.bots())
@@ -106,6 +115,7 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
         socket.data.accessRevision = gatewayAccessRevision(io);
         // A terminal socket (browser or box host) has its own handshake, decided on auth.type alone
         if (isShellHandshake(socket.handshake.auth)) return shellHandshake({ db, jwtSecret, hub: shell, provenanceRefused }, socket, next);
+        if (isLiveHandshake(socket.handshake.auth)) return liveHandshake({ db, jwtSecret, hub: live, provenanceRefused }, socket, next);
         const type = socket.handshake.auth?.type;
         let token = socket.handshake.auth?.token;
         let fromCookie = false;
@@ -240,6 +250,7 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
 
     io.on('connection', (socket) => {
         if (socket.data.shell || socket.data.shellHost) { shellConnection(shell, socket); return; }
+        if (socket.data.liveView || socket.data.liveHost) { liveConnection(live, socket); return; }
         void readGatewayAccess(io, async () => {
         const userId = (socket as any).userId;
         if (!socket.data.isBot) {
@@ -303,6 +314,8 @@ export async function setupGateway(app: FastifyInstance): Promise<Server> {
                         for (const e of events) socket.to(`channel:${e.channelId}`).emit('AgentPresence', e);
                     };
                     broadcast(agentPresence.connect(botId, name.rows[0]?.username ?? '', socket.id, mode, channelIds));
+                    // A live terminal's owner may have the controls: a channel that connects now is told to hold
+                    if (mode === 'channel') live.botConnected(botId, socket);
                     // The SessionEnd hook may have ended the terminal session while this socket
                     // stayed up (/clear keeps agora-mcp running): listening or working again
                     // starts a fresh one. Chained, so an Activity update lands on the new row.

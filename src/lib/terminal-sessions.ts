@@ -68,7 +68,7 @@ export async function noticeStandby(c: PoolClient | any, channelId: string, botI
         `SELECT t.id, u.username, h.id AS hosted_id FROM agent_sessions t
          JOIN users u ON u.id = t.bot_id
          JOIN agent_sessions h ON h.channel_id = t.channel_id AND h.bot_id = t.bot_id AND h.kind = 'hosted'
-              AND h.state = 'live' AND h.thread_id IS NULL
+              AND h.state = 'live' AND h.thread_id IS NULL AND NOT h.live_mode
          WHERE t.channel_id = $1 AND t.bot_id = $2 AND t.kind = 'terminal' AND t.state = 'live' AND t.standby_notice_at IS NULL
          FOR UPDATE OF t`,
         [channelId, botId]

@@ -178,6 +178,8 @@ async function liveSessions(db: any, channelId: string, threadId: string | null 
          JOIN agent_profiles p ON p.id = s.profile_id
          JOIN servers srv ON srv.id = s.server_id
          WHERE s.channel_id = $1 AND s.state = 'live' AND s.kind = 'hosted' AND s.thread_id IS NOT DISTINCT FROM $2
+           -- A live-terminal session hears messages through its Channel, never through the inbox (migration 104)
+           AND NOT s.live_mode
          ORDER BY s.id`,
         [channelId, threadId]
     );

@@ -195,6 +195,8 @@ export async function claimNext(pool: Pool, host: Host, notices: Notice[]): Prom
         `SELECT s.id FROM agent_sessions s
          JOIN agent_profiles p ON p.id = s.profile_id
          WHERE p.host_id = $1 AND p.server_id = $2 AND s.state = 'live'
+           -- A live-terminal session runs no per-wake runs (migration 104)
+           AND NOT s.live_mode
            -- The owner has a terminal open in this agent's box: no new wake until it closes
            -- (docs/box-terminal.md). A run already working is not touched.
            AND NOT EXISTS (SELECT 1 FROM agent_boxes xb JOIN box_shell_sessions sh ON sh.box_id = xb.id AND sh.state <> 'closed'

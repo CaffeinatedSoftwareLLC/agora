@@ -64,8 +64,10 @@ export function sessionJson(r: any, viewerId?: string) {
         authMode: r.auth_mode ?? 'subscription', runApproval: !!r.run_approval,
         // As in the profile JSON (docs/agent-boxes.md §10): hostMode drives the owner-only rule, boxed the label
         hostMode: !!r.host_mode, boxed: !!r.boxed,
+        // Live terminal mode (docs/planning/live-terminals.md): the session's own interactive CLI; no token use is measured
+        liveMode: !!r.live_mode, liveState: r.live_state ?? null, liveNote: r.live_note ?? null, tokensMeasured: !r.live_mode,
         // What `@agent /command` can do for this session's CLI (docs/agent-commands.md); a terminal session can't be driven from Agora
-        adapter: r.adapter ?? null, commands: r.kind === 'terminal' ? [] : controlsOf(r.adapter), pendingCommand: r.pending_command ?? null,
+        adapter: r.adapter ?? null, commands: r.kind === 'terminal' || r.live_mode ? [] : controlsOf(r.adapter), pendingCommand: r.pending_command ?? null,
         branch: r.branch ?? null, baseSha: r.base_sha ?? null, headSha: r.head_sha ?? null,
         workspaceId: r.workspace_id,
         threadId: r.thread_id?.trim() ?? null, parentSessionId: r.parent_session_id?.trim() ?? null, title: r.title ?? null,
@@ -368,8 +370,11 @@ async function startSession(db: any, channelId: string, profileName: string, onL
     const botId = profile.bot_id.trim();
     await botInChannel(db, botId, channelId);
 
+    // Live terminal mode (migration 104): the session's own interactive CLI is the terminal, so a
+    // terminal row for this bot is expected, not a reason to ask
+    const liveMode = profile.session_mode === 'live';
     // Connected from a terminal: the terminal answers here, so ask before starting a hosted session
-    const terminal = await terminalFor(db, channelId, botId);
+    const terminal = liveMode ? null : await terminalFor(db, channelId, botId);
     if (terminal && onLive !== 'standby') {
         if (onLive === 'keep') return { status: 200, body: { action: 'kept_terminal', session: sessionJson(terminal) } };
         if (onLive === 'ask') throw new CommandError(409, {
@@ -401,8 +406,11 @@ async function startSession(db: any, channelId: string, profileName: string, onL
             await refuseAtLimit(db, id);
             // Resuming makes it the resumer's session: started_by decides the subscription rule
             await db.query(
-                `UPDATE agent_sessions SET state = 'live', end_reason = NULL, limit_stop = NULL, shelved_at = NULL, last_active_at = NOW(), started_by = $2 WHERE id = $1`,
-                [id, userId]
+                `UPDATE agent_sessions SET state = 'live', end_reason = NULL, limit_stop = NULL, shelved_at = NULL, last_active_at = NOW(), started_by = $2,
+                        live_mode = $3, live_state = NULL, live_note = NULL,
+                        native_session_id = CASE WHEN $3 THEN COALESCE(native_session_id, gen_random_uuid()::text) ELSE native_session_id END
+                 WHERE id = $1`,
+                [id, userId, liveMode]
             );
             await announce(db, channelId, id, `${who} resumed ${profile.name}'s session (${id}).`, notices);
             if (terminal) await noticeStandby(db, channelId, botId, notices);
@@ -413,12 +421,12 @@ async function startSession(db: any, channelId: string, profileName: string, onL
 
     const id = generateUlid();
     await db.query(
-        `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, profile_id, started_by, workspace_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [id, profile.server_id, channelId, botId, profile.id, userId, profile.workspace_id]
+        `INSERT INTO agent_sessions (id, server_id, channel_id, bot_id, profile_id, started_by, workspace_id, live_mode, native_session_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CASE WHEN $8 THEN gen_random_uuid()::text END)`,
+        [id, profile.server_id, channelId, botId, profile.id, userId, profile.workspace_id, liveMode]
     );
     await announce(db, channelId, id,
-        `${who} started a ${profile.name} session (${id})${shelvedNow ? '; the previous one is shelved' : ''}.`, notices);
+        `${who} started a ${profile.name} session (${id})${liveMode ? ' in live terminal mode' : ''}${shelvedNow ? '; the previous one is shelved' : ''}.`, notices);
     if (terminal) await noticeStandby(db, channelId, botId, notices);
     const row = await db.query(`${SESSION_SELECT} WHERE s.id = $1`, [id]);
     return { status: 201, body: { action: 'started', session: sessionJson(row.rows[0]) } };
