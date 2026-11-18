@@ -10,8 +10,8 @@ Boxes only. An agent that runs on your own computer ("unboxed") has no terminal:
 
 ## How to open one
 
-1. Settings, Agents, the agent's box: **Open terminal**. The button is off, with the reason beside it, when the box is not running, is not connected, or **needs its update first** (a box made from an older image has no terminal support, or only the first, weaker kind; rebuild it after upgrading Agora).
-2. A page opens in a new tab and tells you what a terminal is here. Type your password and press **Open terminal**.
+1. Settings, Agents, the agent's page, "Box and login": **Open maintenance shell** (your own shell in the box; the agent's live terminal is a different button, see [live-terminals](planning/live-terminals.md)). The button is off, with the reason beside it, when the box is not running, is not connected, or **needs its update first** (a box made from an older image has no terminal support, or only the first, weaker kind; rebuild it after upgrading Agora).
+2. A page opens in a new tab and tells you what a terminal is here. Type your password and press **Open maintenance shell**.
 3. If another terminal is already open on that box, the page says who opened it and asks before closing it: only one terminal per box at a time.
 
 The confirm page also says that closing the tab ends the shell and that anything started with `setsid`, `nohup` or `disown` keeps running. The page refuses to open over plain http (except on localhost). A multi-line paste into a shell that did not ask for bracketed paste asks before sending.

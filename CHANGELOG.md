@@ -4,6 +4,13 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
+### Fixed
+
+- **The box terminal (since 0.4.2) and the live terminal (0.4.4) answered "Open the terminal from this site's own pages." on every install behind Caddy or Tailscale, so neither could be opened.** The API compares the page's Origin with the scheme and host it is told; the web container's nginx replaced the proxy's `X-Forwarded-Proto` with its own `http` and passed `$host`, which drops a port such as `:8443`. nginx now forwards the scheme and Host the browser used (`agora-ui/nginx.conf`, falling back to its own scheme when no proxy set one). A test now runs the real nginx config in front of a stub upstream.
+- **The live terminal's "Open the agent's terminal" button vanished from the agent's sheet exactly when the agent started waiting on you.** The sheet treated the waiting state as not live and hid the whole terminal panel. The panel now stays, turns into a highlighted "Open the agent's terminal to answer it", the chip says "waiting on you" in the warning colour, and the link no longer depends on the session carrying a server id.
+- **Switching an agent to "Live terminal" did nothing visible while a session of it was live.** The refusal showed at the top of the whole settings page. It now shows under the control and names the channels ("End its session in #agora first: /end boxed-claude"), and the control moved from "Limits and tools" to "How it runs" on the agent's page.
+- The two terminal buttons are named differently: "Open maintenance shell" (your shell in the box, in "Box and login") and "Open the agent's terminal" (a live-terminal agent's own CLI).
+
 ## 0.4.4 — 2026-11-16
 
 Live terminals, first step ([docs/planning/live-terminals.md](docs/planning/live-terminals.md)): a boxed Claude Code agent can run its normal interactive CLI in a terminal that stays alive in its box, and you watch it and type into it from the browser or your phone. It is a choice per agent in Settings, off unless you turn it on; per-wake runs stay the default. Token usage is not measured in this mode. **Upgrade note:** agent boxes are rebuilt on upgrade (box image 8); home folders and logins are kept.

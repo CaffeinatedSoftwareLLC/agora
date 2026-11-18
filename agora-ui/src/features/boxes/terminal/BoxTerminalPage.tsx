@@ -246,7 +246,7 @@ export function BoxTerminalPage() {
           </label>
           {message && <p className="text-danger" role="alert">{message}</p>}
           <div className="flex flex-col gap-2 md:flex-row">
-            <Button type="submit" loading={busy} disabled={!password}>{takeover ? 'Close that one and open here' : 'Open terminal'}</Button>
+            <Button type="submit" loading={busy} disabled={!password}>{takeover ? 'Close that one and open here' : 'Open maintenance shell'}</Button>
             <Link to="/settings/agents" className="inline-flex min-h-11 items-center justify-center rounded-lg border border-border px-4 text-[13px] md:min-h-9">Cancel</Link>
           </div>
         </form>

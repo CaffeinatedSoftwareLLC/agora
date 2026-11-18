@@ -5,6 +5,7 @@ import { LiveWork } from './LiveWork';
 import { useRunStreams } from './runStream';
 import { SessionWorkspace } from './SessionWorkspace';
 import { useUIStore } from '../../stores/uiStore';
+import { useChannelStore } from '../../stores/channelStore';
 import { useOverlayFocus } from '../shell/useOverlayFocus';
 import { BoxModeBadge } from '../boxes/BoxModeBadge';
 import {
@@ -67,6 +68,8 @@ function shortId(id: string): string {
 
 export function SessionSheet({ open, onClose, channelId, mode, sessions, profiles, profilesError, onChanged }: SessionSheetProps) {
   const titleId = useId();
+  // The session's own serverId can be missing; the channel's server is always known here
+  const channelServerId = useChannelStore(s => s.channels.get(channelId)?.serverId ?? null);
   // The running agent's live output, the same stream the channel shows (docs/live-output.md)
   const streams = useRunStreams(channelId, open);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -257,7 +260,9 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
     title = `Agent: ${selected}`;
     const state = chip?.state;
     const current = chip?.session;
-    const live = state === 'working' || state === 'idle' || state === 'sleeping' || state === 'standby';
+    const terminalServerId = current?.serverId ?? channelServerId;
+    // 'waiting' (a live terminal asking the owner something) is a live state too: leaving it out hid the whole panel, and its terminal link, exactly when the agent needed the owner
+    const live = state === 'working' || state === 'waiting' || state === 'idle' || state === 'sleeping' || state === 'standby';
     const history = (chip?.sessions ?? []).filter(s => !(live && s.id === current?.id)).slice(0, 5);
     const latestShelved = chip?.sessions.find(s => s.state === 'shelved');
 
@@ -282,16 +287,16 @@ export function SessionSheet({ open, onClose, channelId, mode, sessions, profile
         {state === 'working' && current?.run && streams[current.run.id] && <LiveWork stream={streams[current.run.id]} name={current.profile} />}
 
         {live && current?.liveMode && (
-          <div className="space-y-2 rounded-lg border border-border p-3 text-sm" data-testid="live-terminal-panel">
-            <p className="font-medium">Live terminal</p>
-            <p className="text-text-muted">{liveStateText(current)}</p>
+          <div className={`space-y-2 rounded-lg border p-3 text-sm ${state === 'waiting' ? 'border-warn bg-warn/10' : 'border-border'}`} data-testid="live-terminal-panel">
+            <p className="font-medium">{state === 'waiting' ? 'Live terminal: waiting on you' : 'Live terminal'}</p>
+            <p className={state === 'waiting' ? 'font-medium text-text' : 'text-text-muted'}>{liveStateText(current)}</p>
             <p className="text-text-muted">
               This agent runs its own interactive CLI in a terminal in its box. Chat messages reach it as Channel pushes, never as typed keys.
               To compact or clear it, type the command in its terminal. Token budgets need per-wake runs.
             </p>
-            {current.serverId && (
-              <a className={BTN_PRIMARY} href={`/live-terminal/${current.serverId}/${current.id}`} target="_blank" rel="noopener noreferrer" data-testid="open-live-terminal">
-                Open terminal
+            {terminalServerId && (
+              <a className={BTN_PRIMARY} href={`/live-terminal/${terminalServerId}/${current.id}`} target="_blank" rel="noopener noreferrer" data-testid="open-live-terminal">
+                {state === 'waiting' ? "Open the agent's terminal to answer it" : "Open the agent's terminal"}
               </a>
             )}
           </div>

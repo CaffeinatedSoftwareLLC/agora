@@ -70,7 +70,7 @@ export function TerminalControls({ box, onChange }: { box: Box; onChange: () => 
     <div className="mt-2 rounded border border-border bg-bg px-3 py-2" data-testid="terminal-controls">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs font-semibold text-text-muted">Terminal</span>
-        <Button variant="secondary" onClick={open} disabled={!r?.ready} data-testid="open-terminal">Open terminal</Button>
+        <Button variant="secondary" onClick={open} disabled={!r?.ready} data-testid="open-terminal">Open maintenance shell</Button>
         {r && !r.ready && <span className="text-xs text-warn" data-testid="terminal-hint">{r.text}</span>}
         {status?.open && (
           <span className="text-xs text-text-muted" data-testid="terminal-open-now">
