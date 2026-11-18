@@ -185,7 +185,7 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
               <StateDot state={chip.state} />
               <span className="font-medium">{chip.profile}</span>
               <BoxModeBadge profile={chip.session} />
-              {chip.session.liveMode && chip.session.state === 'live' && <span className="text-xs text-text-muted" data-testid="live-chip-note">terminal{chip.state === 'waiting' ? ' · waiting on you' : ''}</span>}
+              {chip.session.liveMode && chip.session.state === 'live' && <span className={`text-xs ${chip.state === 'waiting' ? 'font-semibold text-warn' : 'text-text-muted'}`} data-testid="live-chip-note">terminal{chip.state === 'waiting' ? ' · waiting on you' : ''}</span>}
               {resets && <span className="text-xs text-text-muted">Sleeping · <span className="hidden sm:inline">resets </span>{resets}</span>}
               {tokens && <span className="font-mono text-xs text-text-muted">{tokens}</span>}
             </span>

@@ -370,8 +370,15 @@ export async function agentHostRoutes(app: FastifyInstance) {
                     const box = await db.query(`SELECT 1 FROM agent_boxes WHERE profile_id = $1 AND deleted_at IS NULL`, [profileId]);
                     if (!box.rows.length || (b.adapter ?? p.adapter) !== 'claude') return { status: 409, body: { error: 'live_terminal_boxed_claude_only' } };
                 }
-                const used = await db.query(`SELECT 1 FROM agent_sessions WHERE profile_id = $1 AND state = 'live' AND kind = 'hosted' LIMIT 1`, [profileId]);
-                if (used.rows.length) return { status: 409, body: { error: 'end_sessions_before_changing_mode' } };
+                const used = await db.query(
+                    `SELECT btrim(s.channel_id) AS channel_id, c.name AS channel_name FROM agent_sessions s JOIN channels c ON c.id = s.channel_id
+                     WHERE s.profile_id = $1 AND s.state = 'live' AND s.kind = 'hosted' ORDER BY c.name LIMIT 20`, [profileId]);
+                if (used.rows.length) {
+                    // Name the channels so the settings page can say where to /end it
+                    const channels = used.rows.map((r: any) => ({ id: r.channel_id, name: r.channel_name }));
+                    return { status: 409, body: { error: 'end_sessions_before_changing_mode', profile: p.name, channels,
+                        message: `End its session in ${channels.map((c: any) => `#${c.name}`).join(', ')} first: /end ${p.name}` } };
+                }
             }
             const bad = await checkRefs(db, serverId, b.botId, b.hostId);
             if (bad) return { status: 400, body: { error: bad } };

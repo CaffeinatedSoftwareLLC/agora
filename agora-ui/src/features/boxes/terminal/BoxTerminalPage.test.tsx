@@ -113,7 +113,7 @@ it('tells the owner what it means before asking for the password, and shows the 
   expect(confirm.textContent).not.toContain('reaches nothing more than the agent can');
   expect(confirm.textContent).not.toContain('same user');
   expect(confirm.querySelectorAll('li').length).toBeLessThanOrEqual(10);
-  expect(screen.getByRole('button', { name: 'Open terminal' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Open maintenance shell' })).toBeDisabled();
   expect(screen.queryByTestId('terminal-takeover')).toBeNull();
 });
 
@@ -122,7 +122,7 @@ it('a wrong password gets no terminal, says so and clears the field', async () =
   renderPage();
   await screen.findByTestId('terminal-confirm');
   fillPassword('nope');
-  fireEvent.click(screen.getByRole('button', { name: 'Open terminal' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open maintenance shell' }));
   expect(await screen.findByText('That password is not right.')).toBeInTheDocument();
   expect((screen.getByLabelText(/Your password/) as HTMLInputElement).value).toBe('');
   expect(sockets).toHaveLength(0);
@@ -133,7 +133,7 @@ it('opening: ticket, its own socket, the size, the shell, typing, output, resize
   renderPage();
   await screen.findByTestId('terminal-confirm');
   fillPassword();
-  fireEvent.click(screen.getByRole('button', { name: 'Open terminal' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open maintenance shell' }));
   await waitFor(() => expect(sockets).toHaveLength(1));
   expect(sockets[0].ticket).toBe('T'.repeat(43));
   expect(ticket).toHaveBeenCalledWith(ID, 'TestPass123!', false);
@@ -177,7 +177,7 @@ it('a large paste goes in pieces the server accepts, never splitting a character
   renderPage();
   await screen.findByTestId('terminal-confirm');
   fillPassword();
-  fireEvent.click(screen.getByRole('button', { name: 'Open terminal' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open maintenance shell' }));
   await waitFor(() => expect(sockets).toHaveLength(1));
   await waitFor(() => expect(sockets[0].connected).toBe(true));
   act(() => sockets[0].fire('shell:ready', {}));
@@ -196,7 +196,7 @@ it('a terminal that ended for a limit says which', async () => {
   renderPage();
   await screen.findByTestId('terminal-confirm');
   fillPassword();
-  fireEvent.click(screen.getByRole('button', { name: 'Open terminal' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open maintenance shell' }));
   await waitFor(() => expect(sockets).toHaveLength(1));
   act(() => sockets[0].fire('shell:ready', {}));
   act(() => sockets[0].fire('shell:exit', { reason: 'idle_timeout' }));
@@ -210,7 +210,7 @@ it('a refused ticket at the socket ends it with a plain sentence', async () => {
   renderPage();
   await screen.findByTestId('terminal-confirm');
   fillPassword();
-  fireEvent.click(screen.getByRole('button', { name: 'Open terminal' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open maintenance shell' }));
   await waitFor(() => expect(sockets).toHaveLength(1));
   act(() => sockets[0].fire('connect_error', new Error('ticket_invalid')));
   expect(await screen.findByTestId('terminal-ended')).toHaveTextContent('single-use');
@@ -230,7 +230,7 @@ it('what the shell prints cannot reach the clipboard, the page title or a link',
   renderPage();
   await screen.findByTestId('terminal-confirm');
   fillPassword();
-  fireEvent.click(screen.getByRole('button', { name: 'Open terminal' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open maintenance shell' }));
   await waitFor(() => expect(terms).toHaveLength(1));
   const term = terms[0];
   // Only the fit addon is loaded: no clipboard addon (OSC 52 is ignored), no web-links addon
@@ -251,7 +251,7 @@ it('leaving the page ends the shell: the socket is dropped and the widget dispos
   const view = renderPage();
   await screen.findByTestId('terminal-confirm');
   fillPassword();
-  fireEvent.click(screen.getByRole('button', { name: 'Open terminal' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open maintenance shell' }));
   await waitFor(() => expect(sockets).toHaveLength(1));
   view.unmount();
   expect(sockets[0].connected).toBe(false);
@@ -262,7 +262,7 @@ it('the phone toolbar sends the keys a soft keyboard lacks', async () => {
   renderPage();
   await screen.findByTestId('terminal-confirm');
   fillPassword();
-  fireEvent.click(screen.getByRole('button', { name: 'Open terminal' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open maintenance shell' }));
   await waitFor(() => expect(sockets).toHaveLength(1));
   await waitFor(() => expect(sockets[0].connected).toBe(true));
   act(() => sockets[0].fire('shell:ready', {}));
@@ -284,7 +284,7 @@ async function openLive() {
   renderPage();
   await screen.findByTestId('terminal-confirm');
   fillPassword();
-  fireEvent.click(screen.getByRole('button', { name: 'Open terminal' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open maintenance shell' }));
   await waitFor(() => expect(sockets).toHaveLength(1));
   await waitFor(() => expect(sockets[0].connected).toBe(true));
   act(() => sockets[0].fire('shell:ready', {}));

@@ -16,6 +16,7 @@ vi.mock('./AgentSessionsSettings', () => ({
   SubscriptionWakesSection: () => <section aria-label="wakes">Who can wake subscription agents</section>,
   HostsSection: ({ title }: { title?: string }) => <section aria-label="hosts">{title}</section>,
   OnceToken: () => null, CreateAgentForm: () => <div>Create agent form</div>,
+  SessionModeControl: ({ profile }: { profile: { name: string } }) => <div data-testid="mode-control">How it works for {profile.name}</div>,
   ProfileRow: ({ profile }: { profile: { name: string } }) => <li>Profile settings for {profile.name}</li>,
 }));
 vi.mock('./BotManagement', () => ({
@@ -126,6 +127,16 @@ describe('Agent detail', () => {
     expect(headings()).toEqual(['How it runs', 'Box and login', 'Limits and tools', 'Sessions', 'Account and access']);
     expect(screen.getByText('Box card for boxy')).toBeTruthy();
     expect(screen.getByTestId('agent-state')).toHaveTextContent('Stopped: The box is stopped.');
+  });
+
+  it('puts the How it works control in How it runs, for the owner only', () => {
+    open('bot-boxy');
+    const section = screen.getByRole('heading', { name: 'How it runs' }).closest('section')!;
+    expect(section).toContainElement(screen.getByTestId('mode-control'));
+    cleanup();
+    useAuthStore.setState({ user: { id: 'someone', username: 'someone', isInstanceAdmin: false } });
+    open('bot-boxy');
+    expect(screen.queryByTestId('mode-control')).toBeNull();
   });
 
   it('shows the model section for a model agent and no session limits', () => {

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, ApiError, serverApi } from '../../lib/api';
 import { useServerStore } from '../../stores/serverStore';
-import { AgentSessionsSettings, SubscriptionWakesSection } from './AgentSessionsSettings';
+import { AgentSessionsSettings, SessionModeControl, SubscriptionWakesSection } from './AgentSessionsSettings';
 
 beforeEach(() => {
   useServerStore.setState({ instanceServerId: 'S' });
@@ -128,10 +128,11 @@ describe('Show live output (docs/live-output.md)', () => {
 });
 
 describe('How it works (live terminals, docs/planning/live-terminals.md)', () => {
+  const prof = (over: object = {}) => ({ id: 'P', name: 'claude', botId: 'B', hostId: 'H', adapter: 'claude', boxed: true, sessionMode: 'runs', ...over }) as never;
   it('is offered for boxed Claude Code only, says that token budgets need per-wake runs, and saves at once', async () => {
-    profiles({}, { boxed: true, adapter: 'claude', sessionMode: 'runs' });
     const patch = vi.spyOn(api, 'patch').mockResolvedValue({});
-    render(<AgentSessionsSettings />);
+    const onChange = vi.fn();
+    render(<SessionModeControl serverId="S" profile={prof()} onChange={onChange} />);
     const live = await screen.findByRole('radio', { name: 'Live terminal for claude' });
     expect(screen.getByRole('radio', { name: 'Per-wake runs for claude' })).toBeChecked();
     expect(live).not.toBeChecked();
@@ -139,25 +140,34 @@ describe('How it works (live terminals, docs/planning/live-terminals.md)', () =>
     expect(screen.getByTestId('session-mode-claude')).toHaveTextContent('Task-card and subtask work of this agent still runs as per-wake runs')
     fireEvent.click(live);
     await waitFor(() => expect(patch).toHaveBeenCalledWith('/servers/S/agent-profiles/P', { sessionMode: 'live' }));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
   });
-  it('is not offered for an unboxed agent or another CLI', async () => {
-    profiles({}, { boxed: false, adapter: 'claude' });
-    render(<AgentSessionsSettings />);
-    await screen.findByRole('checkbox', { name: 'Show live output for claude' });
-    expect(screen.queryByTestId('session-mode-claude')).toBeNull();
+  it('is not offered for an unboxed agent or another CLI, and is no longer in the limits card', async () => {
+    const view = render(<SessionModeControl serverId="S" profile={prof({ boxed: false })} onChange={vi.fn()} />);
+    expect(view.container.innerHTML).toBe('');
+    view.rerender(<SessionModeControl serverId="S" profile={prof({ adapter: 'codex' })} onChange={vi.fn()} />);
+    expect(view.container.innerHTML).toBe('');
     cleanup();
-    profiles({}, { boxed: true, adapter: 'codex' });
+    profiles({}, { boxed: true, adapter: 'claude' });
     render(<AgentSessionsSettings />);
     await screen.findByRole('checkbox', { name: 'Show live output for claude' });
     expect(screen.queryByTestId('session-mode-claude')).toBeNull();
   });
-  it('shows a profile in live mode as chosen, and says to end its sessions first when the server refuses', async () => {
-    profiles({}, { boxed: true, adapter: 'claude', sessionMode: 'live' });
-    vi.spyOn(api, 'patch').mockRejectedValue(new ApiError(409, 'end_sessions_before_changing_mode'));
-    render(<AgentSessionsSettings />);
+  it('shows a profile in live mode as chosen, and says right under the control which channel to /end it in when the server refuses', async () => {
+    vi.spyOn(api, 'patch').mockRejectedValue(new ApiError(409, 'end_sessions_before_changing_mode', {
+      error: 'end_sessions_before_changing_mode', channels: [{ id: 'C', name: 'agora' }], message: 'End its session in #agora first: /end claude' }));
+    render(<SessionModeControl serverId="S" profile={prof({ sessionMode: 'live' })} onChange={vi.fn()} />);
     expect(await screen.findByRole('radio', { name: 'Live terminal for claude' })).toBeChecked();
     fireEvent.click(screen.getByRole('radio', { name: 'Per-wake runs for claude' }));
-    expect(await screen.findByText(/End its sessions before changing how it works/)).toBeInTheDocument();
+    const error = await screen.findByTestId('session-mode-error-claude');
+    expect(error).toHaveTextContent('End its session in #agora first: /end claude');
+    expect(screen.getByTestId('session-mode-claude')).toContainElement(error);
+  });
+  it('falls back to a plain sentence from an older server that names no channels', async () => {
+    vi.spyOn(api, 'patch').mockRejectedValue(new ApiError(409, 'end_sessions_before_changing_mode'));
+    render(<SessionModeControl serverId="S" profile={prof()} onChange={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('radio', { name: 'Live terminal for claude' }));
+    expect(await screen.findByTestId('session-mode-error-claude')).toHaveTextContent('End its session first (/end claude)');
   });
 });
 

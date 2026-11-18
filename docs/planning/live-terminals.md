@@ -43,7 +43,7 @@ Only boxed Claude Code can use it in this slice. Settings says plainly that toke
 - Session in the box: `agora-host/src/live-terminal.ts`, `box/agora-live-hook`, the image's fake interactive CLI (`box/fake/fake-cli.mjs`) for tests.
 - Delivery and the controls hold: `live-hub.ts` `dispatch`, `agora-mcp/src/channel.ts` (`onLiveDeliver`).
 - Hub: `src/lib/boxes/live-hub.ts`, route `GET /servers/:id/live-terminals/:sessionId`, migration 104.
-- Viewer page `/live-terminal/:serverId/:sessionId` (`agora-ui/src/features/boxes/terminal/LiveTerminalPage.tsx`), opened from the agent's session sheet ("Open terminal"); the chip says "terminal" and "waiting on you".
+- Viewer page `/live-terminal/:serverId/:sessionId` (`agora-ui/src/features/boxes/terminal/LiveTerminalPage.tsx`), opened from the agent's session sheet ("Open the agent's terminal", or "Open the agent's terminal to answer it" while it waits on you, which also shows in the panel and the chip; not to be confused with the owner's "Open maintenance shell" in "Box and login"); the chip says "terminal" and "waiting on you".
 
 ## Known limits of this slice
 
@@ -71,9 +71,9 @@ The box suite runs an interactive fake CLI that honours the Channel push through
 ## Manual test on a real box
 
 1. Update Agora, then rebuild the agent's box (Settings → Agents, the box, Rebuild) so it has image version 8.
-2. Settings → Agents, the agent's card, "How it works": choose "Live terminal".
+2. Settings → Agents, the agent's page, "How it runs", "How it works": choose "Live terminal".
 3. In the channel, type `/start <agent>`.
-4. Open the agent's chip, then press "Open terminal".
+4. Open the agent's chip, then press "Open the agent's terminal".
 5. If the state says "Waiting on you" with a startup prompt, press "Take the keyboard", confirm, and answer the prompt in the terminal.
 6. Wait for the state "Idle".
 7. In the channel, type `@<agent> reply with the word ok`.

@@ -212,6 +212,9 @@ describe('the mode switch', () => {
         const live = await api.patch(`/servers/${serverId}/agent-profiles/${box.profileId}`).set(owner.auth).send({ sessionMode: 'runs' });
         expect(live.status).toBe(409);
         expect(live.body.error).toBe('end_sessions_before_changing_mode');
+        // It names the channel to end the session in
+        expect(live.body.channels).toEqual([{ id: channelId, name: 'general' }]);
+        expect(live.body.message).toBe('End its session in #general first: /end alpha');
         // Not for a profile on a machine host
         const hostRes = await api.post(`/servers/${serverId}/agent-hosts`).set(owner.auth).send({ name: 'laptop' });
         const bot = await api.post(`/servers/${serverId}/agents`).set(owner.auth).send({ name: 'machinebot', adapter: 'claude', hostId: hostRes.body.host.id, workdirAlias: 'w', hostModeAck: true });

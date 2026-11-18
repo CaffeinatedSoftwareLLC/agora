@@ -5,7 +5,7 @@ import { useServerStore } from '../../stores/serverStore';
 import { useAuthStore } from '../../stores/authStore';
 import { STATE_LABEL, sessionState, stopLabel, compactTokens, type AgentSession } from '../agents/agentSessions';
 import { BoxCard } from '../boxes/BoxCard';
-import { ProfileRow } from './AgentSessionsSettings';
+import { ProfileRow, SessionModeControl } from './AgentSessionsSettings';
 import { AgentRow as ModelAgentRow } from './ai/AgentsSection';
 import { BotControls, BotDetailPanel } from './BotManagement';
 import { KIND_HELP, KIND_LABEL, findRow, type AgentRow } from './agentRoster';
@@ -116,6 +116,7 @@ export function AgentDetail() {
         <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
           {runsFacts(row).map(([k, v]) => <div key={k} className="contents"><dt className="text-text-muted">{k}</dt><dd className="text-text">{v}</dd></div>)}
         </dl>
+        {isOwner && row.profile && <SessionModeControl serverId={serverId} profile={row.profile} onChange={reload} />}
         {row.kind === 'terminal' && (
           <p className="mt-2 text-xs text-text-muted">To connect another terminal as this agent, make a token under Account and access, then choose Invite Agent.</p>
         )}

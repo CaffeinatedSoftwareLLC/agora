@@ -1,5 +1,9 @@
 {$DOMAIN:localhost} {
     # Frontend + API → nginx
+    # reverse_proxy passes the browser's Host through unchanged (port included, e.g. localhost:8443)
+    # and sets X-Forwarded-For/-Proto/-Host itself, ignoring any the client sent (Caddy docs,
+    # reverse_proxy; that holds unless the client is in `trusted_proxies`, which is not set here).
+    # nginx passes them on to the API (agora-ui/nginx.conf): the box terminal needs the https scheme.
     handle {
         reverse_proxy web:80
     }
