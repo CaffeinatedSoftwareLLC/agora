@@ -11,6 +11,10 @@ const RETENTION_OPTIONS = [
   { value: 365, label: '365 days' },
 ];
 
+// The largest max file size PATCH /admin/settings/files accepts (files.max_size_bytes <= 104857600 in
+// src/routes/admin.ts). A bigger number is refused with a 400, so the form says so before it sends.
+export const MAX_FILE_SIZE_MB = 100;
+
 function formatBytes(bytesStr: string): string {
   const bytes = Number(bytesStr);
   if (bytes === 0) return '0 B';
@@ -53,8 +57,13 @@ export function StorageSettings() {
       .finally(() => setLoading(false));
   }, []);
 
+  const maxSizeProblem = !Number.isInteger(maxSizeMB) || maxSizeMB < 1
+    ? 'Enter a whole number of MB, 1 or more.'
+    : maxSizeMB > MAX_FILE_SIZE_MB ? `The most this server allows is ${MAX_FILE_SIZE_MB} MB.` : '';
+
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
+    if (maxSizeProblem) return;
     setSaving(true);
     setError('');
     setSuccess('');
@@ -167,13 +176,21 @@ export function StorageSettings() {
             id="max-file-size"
             type="number"
             min={1}
+            max={MAX_FILE_SIZE_MB}
+            step={1}
             value={maxSizeMB}
             onChange={(e) => setMaxSizeMB(Number(e.target.value))}
+            aria-invalid={maxSizeProblem ? true : undefined}
+            aria-describedby="max-file-size-help"
             className="min-h-11 md:min-h-9 bg-surface border border-border rounded px-3 py-2 text-text focus:outline-none focus:ring-2 focus:ring-primary w-32"
           />
-          <span className="text-xs text-text-muted">
-            {(maxSizeMB * 1048576).toLocaleString()} bytes
-          </span>
+          {maxSizeProblem ? (
+            <span id="max-file-size-help" role="alert" className="text-sm text-danger">{maxSizeProblem}</span>
+          ) : (
+            <span id="max-file-size-help" className="text-xs text-text-muted">
+              {(maxSizeMB * 1048576).toLocaleString()} bytes · up to {MAX_FILE_SIZE_MB} MB
+            </span>
+          )}
         </div>
 
         {/* Allowed Extensions */}
@@ -260,7 +277,7 @@ export function StorageSettings() {
         {error && <p className="text-danger text-sm">{error}</p>}
         {success && <p className="text-online text-sm">{success}</p>}
 
-        <Button type="submit" loading={saving}>
+        <Button type="submit" loading={saving} disabled={!!maxSizeProblem}>
           Save Settings
         </Button>
       </form>
