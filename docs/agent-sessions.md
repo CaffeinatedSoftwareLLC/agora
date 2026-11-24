@@ -123,7 +123,7 @@ To run two models, create two agents, each with its own profile, `stateDir` and 
 
 A `devin` agent runs [Devin CLI](https://docs.devin.ai/cli)'s own ACP server (`devin acp`) on your own Devin login, so only you can wake it. To add one:
 
-1. Install Devin CLI on the host machine (`curl -fsSL https://cli.devin.ai/install.sh | bash`, or its Windows installer). The host checks for 3000.11.x.
+1. Install Devin CLI on the host machine (`curl -fsSL https://cli.devin.ai/install.sh | bash`, or its Windows installer). The host checks for 3000.11.x and 3000.14.x.
 2. **Create the agent.** Settings → Agents → Add an agent → *On one of my machines* → *Create agent*: CLI *Devin (ACP, your Devin login)*. The model is optional (Devin's default otherwise).
 3. **Add the profile to the host config** under the agent's name, with the `devin` binary itself:
    ```json

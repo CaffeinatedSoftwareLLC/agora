@@ -3,7 +3,7 @@ import type { Channel } from '../../lib/contracts/server';
 import { Button } from '../../components/ui/Button';
 import { boxApi, boxUpgradeTarget, type Box, type BoxAction, type BoxPatch } from './api';
 import {
-  ADAPTER_LABEL, INPUT, LIMITS, LOGIN_LABEL, TOUCH, boxError, daysLeft, domainProblem, loginHint, normalizeDomain, parseRepos,
+  ADAPTER_LABEL, INPUT, cliMissingText, LIMITS, LOGIN_LABEL, TOUCH, boxError, daysLeft, domainProblem, loginHint, normalizeDomain, parseRepos,
   resourceProblem, stateChip,
 } from './boxRules';
 import { LoginDialog } from './LoginDialog';
@@ -24,6 +24,7 @@ export function BoxCard({ box, channels, isOwner, onChange }: {
   const chip = stateChip(box);
   const upgradeTo = boxUpgradeTarget(box);
   const hint = loginHint(box);
+  const missingCli = cliMissingText(box);
   const deleted = !!box.deletedAt || box.desiredState === 'deleted';
   const home = channels.find(c => c.id === box.homeChannelId);
 
@@ -69,7 +70,10 @@ export function BoxCard({ box, channels, isOwner, onChange }: {
         )}
         {home && <span className="text-xs text-text-muted">· #{home.name}</span>}
       </div>
-      {hint && !deleted && (
+      {missingCli && !deleted && (
+        <p className="mt-1 break-words text-xs text-danger" data-testid="box-cli-missing">{missingCli}</p>
+      )}
+      {hint && !missingCli && !deleted && (
         <p className={`mt-1 break-words text-xs ${box.loginState === 'failed' ? 'text-danger' : 'text-warn'}`} data-testid="box-login-hint">{hint}</p>
       )}
       {upgradeTo !== null && !deleted && (
@@ -97,7 +101,7 @@ export function BoxCard({ box, channels, isOwner, onChange }: {
         <>
           {isOwner && (
             <div className="mt-2 grid grid-cols-2 gap-2 md:flex md:flex-wrap">
-              {box.auth === 'subscription' && (
+              {box.auth === 'subscription' && !missingCli && (
                 <Button onClick={() => setDialog('login')} disabled={disabled}>{box.loginState === 'logged_in' ? 'Log in again' : 'Log in'}</Button>
               )}
               {box.desiredState === 'stopped'

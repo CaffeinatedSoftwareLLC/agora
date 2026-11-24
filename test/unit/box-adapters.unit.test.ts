@@ -104,11 +104,28 @@ describe('box/Dockerfile installs and links every adapter', () => {
                 expect(box).toMatch(/tar -xzf/);
                 expect(box).toContain('sha256sum -c -');
             }
+            // Every CLI is installed through agora-optional-cli (a missing vendor file skips that CLI, never fails the build)
+            expect(box).toMatch(new RegExp(`agora-optional-cli (npm|fetch) ${name} `));
             expect(box).toMatch(new RegExp(`ln -s \\S+ /opt/agora/bin/${name}\\b`));
             expect(box).toContain(`/opt/agora/bin/${name} --version`);
             expect(stage('test')).toMatch(new RegExp(`ln -s /opt/agora/fake/${name}\\.mjs /opt/agora/bin/${name}\\b`));
         });
     }
+});
+
+describe('box/Dockerfile: no third-party download can fail the build', () => {
+    const box = read('box/Dockerfile').split(/^FROM \S+ AS box$/m)[1]!;
+    it('no CLI is installed outside agora-optional-cli, and a step only skips on its own "unavailable" status (75)', () => {
+        expect(box).not.toMatch(/npm install/);
+        expect(box).not.toMatch(/\bcurl\b[^\n]*-o /);
+        const steps = box.split(/^RUN /m).filter(x => /agora-optional-cli/.test(x));
+        expect(steps).toHaveLength(5);
+        for (const step of steps) expect(step).toContain('elif [ "$rc" != 75 ]; then exit "$rc"; fi');
+    });
+    it('records what is missing in a root-owned file agora-host reads', () => {
+        expect(read('box/Dockerfile')).toContain('/opt/agora/missing-clis');
+        expect(read('agora-host/src/box.ts')).toContain("missingFile: '/opt/agora/missing-clis'");
+    });
 });
 
 describe('the UI offers every adapter', () => {
@@ -203,7 +220,7 @@ describe('Devin in a box', () => {
     it('the owner\'s own login only, Devin\'s provider seam allowed, flags, error reports and updates refused', () => {
         expect(BOX_ADAPTER_REGISTRY.devin).toMatchObject({ label: 'Devin', protocol: 'acp', authModes: ['subscription'], modelRequired: false,
             loginDomains: ['devin.ai', 'windsurf.com'], loginOnly: ['app.devin.ai'] });
-        expect(BOX_ADAPTER_REGISTRY.devin.image).toMatchObject({ version: '3000.11.234', versionArg: 'DEVIN_VERSION' });
+        expect(BOX_ADAPTER_REGISTRY.devin.image).toMatchObject({ version: '3000.14.30821', versionArg: 'DEVIN_VERSION' });
         expect(boxHasLogin('devin')).toBe(true);
         // Only the provider seam stays open; its sign-in host is reachable only while a login is open
         expect(defaultAllowlist('devin')).toEqual(['server.codeium.com', 'registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org']);
@@ -221,7 +238,7 @@ describe('Devin in a box', () => {
         const settings = JSON.parse(HOST_ADAPTERS.devin.state.files['config/devin/config.json']);
         expect(settings.auto_update).toBe(false);
         expect(Object.values(settings.read_config_from).every(v => v === false)).toBe(true);
-        expect(Object.keys(settings.read_config_from).sort()).toEqual(['agents_standard', 'claude', 'cloud', 'copilot', 'cursor', 'opencode', 'windsurf', 'zed']);
+        expect(Object.keys(settings.read_config_from).sort()).toEqual(['agents_standard', 'claude', 'cloud', 'codex', 'copilot', 'cursor', 'kiro', 'opencode', 'windsurf', 'zed']);
     });
     it('the server sends the owner only to Devin\'s own sign-in page', () => {
         expect(loginUrlAllowed('devin', 'https://app.devin.ai/auth/cli/continue?state=x&prompt=select_account')).toBe(true);

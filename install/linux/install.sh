@@ -365,6 +365,7 @@ api_base "$API_PORT"
 step health 'Waiting for the API'
 wait_health 300 || die "the API didn't answer on $API/health within 5 minutes ($(compose_cmd_text "$INSTALL_DIR" 'logs api'))"
 ok "$API/health"
+warn_missing_box_clis "$INSTALL_DIR"
 
 # ─── 8. First admin ───
 step admin 'Creating the first admin'

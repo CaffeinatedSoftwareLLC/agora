@@ -316,6 +316,24 @@ agora_version() {
     sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' "$1/package.json" 2>/dev/null | head -n 1
 }
 
+# missing_box_clis <dir>: one `name<TAB>code<TAB>detail` line per CLI the box image was built WITHOUT
+# because the vendor's pinned download was not available (box/agora-optional-cli, docs/agent-boxes.md §6.1).
+# Nothing when the image has every CLI, is the test image, or is not built yet.
+missing_box_clis() {
+    local dir=$1 tag
+    tag="agora/box:$(env_get "$dir/$ENV_FILE_NAME" AGORA_BOX_VERSION)$(env_get "$dir/$ENV_FILE_NAME" AGORA_BOX_TAG_SUFFIX)"
+    dk image inspect "$tag" >/dev/null 2>&1 || return 0
+    dk run --rm --network none --pull never --entrypoint cat "$tag" /opt/agora/missing-clis 2>/dev/null || true
+}
+# warn_missing_box_clis <dir>: say which agents' CLIs the image lacks (a warning, never an error: the install works,
+# and agents on the other CLIs are unaffected)
+warn_missing_box_clis() {
+    local name code detail
+    while IFS=$'	' read -r name code detail; do
+        [ -n "$name" ] || continue
+        warn "the box image has no $name CLI: its download was not available when the image was built ($detail). Agents that use $name will not start; the others are unaffected. Upgrade to a newer release to get it."
+    done < <(missing_box_clis "$1")
+}
 box_version() { tr -dc '0-9' < "$1/box/VERSION" 2>/dev/null || printf '1'; }
 
 hex64() { od -An -N32 -tx1 /dev/urandom | tr -d ' \n'; }

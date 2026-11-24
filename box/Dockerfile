@@ -60,6 +60,8 @@ COPY box/agora-box-start /opt/agora/agora-box-start
 # The operator's relay supervisor (restarts the relay with a back-off, as the operator, with no capability)
 COPY box/agora-relay-supervisor /opt/agora/agora-relay-supervisor
 COPY box/agora-pr /usr/local/bin/agora-pr
+# Build-time only: installs each third-party CLI so that a vendor's missing file skips that CLI instead of failing the build
+COPY box/agora-optional-cli /opt/agora/agora-optional-cli
 # The pseudo-terminal behind the owner's terminal in Agora (docs/box-terminal.md): Python's own pty
 # module, so nothing native to build for amd64 or arm64. Root-owned and read-only like the rest of /opt/agora.
 COPY box/agora-pty /opt/agora/agora-pty
@@ -72,7 +74,7 @@ COPY box/as-agent-server /opt/agora/as-agent-server
 COPY box/operator.bashrc /opt/agora/operator.bashrc
 COPY box/operator.gitconfig /opt/agora/operator.gitconfig
 COPY box/AGENTS.md /opt/agora/AGENTS.md
-RUN chmod 0755 /opt/agora/agora-box-init /opt/agora/agora-box-start /opt/agora/agora-relay-supervisor /usr/local/bin/agora-pr /opt/agora/agora-pty /opt/agora/agora-live-hook /usr/local/bin/as-agent /opt/agora/as-agent-server \
+RUN chmod 0755 /opt/agora/agora-box-init /opt/agora/agora-box-start /opt/agora/agora-relay-supervisor /usr/local/bin/agora-pr /opt/agora/agora-pty /opt/agora/agora-live-hook /opt/agora/agora-optional-cli /usr/local/bin/as-agent /opt/agora/as-agent-server \
  && chmod 0644 /opt/agora/AGENTS.md /opt/agora/operator.bashrc /opt/agora/operator.gitconfig
 # PATH lists root-owned directories first: anything that relies on it (docker exec, a root-run step) can't be
 # shadowed from the agent's volume. The agent's own runs get its installs first (agora-box-init sets that).
@@ -106,67 +108,39 @@ ARG BOX_BUILD=
 LABEL org.agora.box.build=${BOX_BUILD}
 
 # ---- box: the real CLIs, pinned (agora-host verifies Claude 2.1.x, Codex 0.163.x, omp
-# 18.17.x and Devin 3000.11.x; opencode is checked by its ACP protocol version). One ARG and one install block per
-# box adapter.
+# 18.17.x and Devin 3000.14.x; opencode is checked by its ACP protocol version). One ARG and one install step per
+# box adapter. EVERY CLI is optional at build time (box/agora-optional-cli): when the vendor's pinned file or
+# version is not available (404/403/410, DNS, timeout) the step prints a warning, records the CLI in
+# /opt/agora/missing-clis and the image is built without it; agora-host in the box reports that agent as
+# unavailable and Agora refuses to start it (docs/agent-boxes.md §6.1). A checksum or integrity MISMATCH on
+# a file that did download, or a CLI that installed but does not run, still fails the build: nothing
+# unexpected is installed and no other version is substituted.
 FROM base AS box
 ARG CLAUDE_CODE_VERSION=2.1.311
 ARG CODEX_VERSION=0.163.0
 ARG OPENCODE_VERSION=1.18.34
 ARG OMP_VERSION=18.17.0
-ARG DEVIN_VERSION=3000.11.234
+ARG DEVIN_VERSION=3000.14.30821
 # HOME=/root: nothing the install or the version checks write may land in the agent's home
-RUN export HOME=/root \
- && npm install -g --no-audit --no-fund "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" \
- && npm cache clean --force \
- && ln -s /usr/local/bin/claude /opt/agora/bin/claude \
- && ln -s /usr/local/bin/codex /opt/agora/bin/codex \
- && /opt/agora/bin/claude --version && /opt/agora/bin/codex --version \
- && rm -rf /root/.npm /root/.claude /root/.claude.json /root/.codex
+RUN export HOME=/root; rc=0; touch /opt/agora/missing-clis  && { /opt/agora/agora-optional-cli npm claude "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" || rc=$?; }  && if [ "$rc" = 0 ]; then       npm cache clean --force       && ln -s /usr/local/bin/claude /opt/agora/bin/claude       && /opt/agora/bin/claude --version       && rm -rf /root/.npm /root/.claude /root/.claude.json;     elif [ "$rc" != 75 ]; then exit "$rc"; fi
+RUN export HOME=/root; rc=0  && { /opt/agora/agora-optional-cli npm codex "@openai/codex@${CODEX_VERSION}" || rc=$?; }  && if [ "$rc" = 0 ]; then       npm cache clean --force       && ln -s /usr/local/bin/codex /opt/agora/bin/codex       && /opt/agora/bin/codex --version       && rm -rf /root/.npm /root/.codex;     elif [ "$rc" != 75 ]; then exit "$rc"; fi
 # opencode (MIT): its postinstall links the native binary for this machine's CPU (glibc, AVX2 or
 # baseline) into opencode-ai/bin; the other platform packages are then dropped (about 550 MB)
-RUN export HOME=/root \
- && npm install -g --no-audit --no-fund "opencode-ai@${OPENCODE_VERSION}" \
- && npm cache clean --force \
- && rm -rf /usr/local/lib/node_modules/opencode-ai/node_modules \
- && ln -s /usr/local/bin/opencode /opt/agora/bin/opencode \
- && /opt/agora/bin/opencode --version \
- && rm -rf /root/.npm /root/.config/opencode /root/.local/share/opencode /root/.local/state/opencode /root/.cache/opencode
+RUN export HOME=/root; rc=0  && { /opt/agora/agora-optional-cli npm opencode "opencode-ai@${OPENCODE_VERSION}" || rc=$?; }  && if [ "$rc" = 0 ]; then       npm cache clean --force       && rm -rf /usr/local/lib/node_modules/opencode-ai/node_modules       && ln -s /usr/local/bin/opencode /opt/agora/bin/opencode       && /opt/agora/bin/opencode --version       && rm -rf /root/.npm /root/.config/opencode /root/.local/share/opencode /root/.local/state/opencode /root/.cache/opencode;     elif [ "$rc" != 75 ]; then exit "$rc"; fi
 # oh-my-pi (MIT): the standalone binary from the GitHub release, checked against the release's
 # SHA256SUMS.txt (it releases every few days, so the version and both sums move together, as in
 # the box adapter registry). --version writes ~/.omp, which goes with the rest of /root.
-RUN export HOME=/root \
- && case "$(dpkg --print-architecture)" in \
-      amd64) arch=x64; sum=a4ce6001ab1012ca835f4184d675437531bd1ac477a7ba8424ed0b5476e9e4cb ;; \
-      arm64) arch=arm64; sum=a9423fd7a69d869bf514931226b21d4ff55474225f574e2911fec457fc470e68 ;; \
-      *) echo "oh-my-pi has no Linux build for $(dpkg --print-architecture)" >&2; exit 1 ;; \
-    esac \
- && curl -fsSL --retry 3 -o /usr/local/bin/omp "https://github.com/can1357/oh-my-pi/releases/download/v${OMP_VERSION}/omp-linux-${arch}" \
- && echo "${sum}  /usr/local/bin/omp" | sha256sum -c - \
- && chmod 0755 /usr/local/bin/omp \
- && ln -s /usr/local/bin/omp /opt/agora/bin/omp \
- && /opt/agora/bin/omp --version \
- && rm -rf /root/.omp
+RUN export HOME=/root; rc=0  && case "$(dpkg --print-architecture)" in       amd64) arch=x64; sum=a4ce6001ab1012ca835f4184d675437531bd1ac477a7ba8424ed0b5476e9e4cb ;;       arm64) arch=arm64; sum=a9423fd7a69d869bf514931226b21d4ff55474225f574e2911fec457fc470e68 ;;       *) echo "oh-my-pi has no Linux build for $(dpkg --print-architecture)" >&2; exit 1 ;;     esac  && { /opt/agora/agora-optional-cli fetch omp "https://github.com/can1357/oh-my-pi/releases/download/v${OMP_VERSION}/omp-linux-${arch}" "${sum}" /usr/local/bin/omp || rc=$?; }  && if [ "$rc" = 0 ]; then       echo "${sum}  /usr/local/bin/omp" | sha256sum -c -       && chmod 0755 /usr/local/bin/omp       && ln -s /usr/local/bin/omp /opt/agora/bin/omp       && /opt/agora/bin/omp --version       && rm -rf /root/.omp;     elif [ "$rc" != 75 ]; then exit "$rc"; fi
 # Devin CLI (Cognition; not on npm): the release tarball for this machine's CPU, checked against
-# its pinned sha256 (static.devin.ai/cli/<version>/manifest.json; the version and both sums move
-# together, as in the box adapter registry). A static binary (about 210 MB); only bin/devin is
-# kept, not its bundled docs. `devin setup` (the installer's interactive wizard) is never run, and
-# the CLI never updates itself in a box: auto_update is off in its config and static.devin.ai is
-# refused at the edge.
-RUN export HOME=/root \
- && case "$(dpkg --print-architecture)" in \
-      amd64) arch=x86_64; sum=201370cddd2924294e3ca6b46fd8ece49b5763953b644a1dd823fce5490cb41a ;; \
-      arm64) arch=aarch64; sum=438ca7f8280b3ef0747afc406e827d9e182156000277a1660358ac4fbd04156e ;; \
-      *) echo "Devin has no Linux build for $(dpkg --print-architecture)" >&2; exit 1 ;; \
-    esac \
- && curl -fsSL --retry 3 --proto '=https' -o /tmp/devin.tar.gz "https://static.devin.ai/cli/${DEVIN_VERSION}/devin-${DEVIN_VERSION}-${arch}-unknown-linux.tar.gz" \
- && echo "${sum}  /tmp/devin.tar.gz" | sha256sum -c - \
- && mkdir -p /opt/devin \
- && tar -xzf /tmp/devin.tar.gz -C /opt/devin bin/devin \
- && rm /tmp/devin.tar.gz \
- && chown -R root:root /opt/devin && chmod 0755 /opt/devin/bin/devin \
- && ln -s /opt/devin/bin/devin /opt/agora/bin/devin \
- && /opt/agora/bin/devin --version \
- && rm -rf /root/.config/devin /root/.local/share/devin /root/.cache/devin
+# its pinned sha256 (static.devin.ai/cli/current/manifest.json while that version is current; the
+# version and both sums move together, as in the box adapter registry). Cognition deletes old
+# versions (3000.11.234 answered 403 from 2026-11), which is why a missing file only skips Devin.
+# A static binary (about 210 MB); only bin/devin is kept, not its bundled docs. `devin setup` (the
+# installer's interactive wizard) is never run, and the CLI never updates itself in a box:
+# auto_update is off in its config and static.devin.ai is refused at the edge.
+RUN export HOME=/root; rc=0  && case "$(dpkg --print-architecture)" in       amd64) arch=x86_64; sum=4dc43e3e4388bace60fe2aa8010cbb399402e724892d7175845b1cdef00e7ddb ;;       arm64) arch=aarch64; sum=3deb8af6b026060e975ed371936e139818020e5dc5abbcba07cde039f473a5a5 ;;       *) echo "Devin has no Linux build for $(dpkg --print-architecture)" >&2; exit 1 ;;     esac  && { /opt/agora/agora-optional-cli fetch devin "https://static.devin.ai/cli/${DEVIN_VERSION}/devin-${DEVIN_VERSION}-${arch}-unknown-linux.tar.gz" "${sum}" /tmp/devin.tar.gz || rc=$?; }  && if [ "$rc" = 0 ]; then       echo "${sum}  /tmp/devin.tar.gz" | sha256sum -c -       && mkdir -p /opt/devin       && tar -xzf /tmp/devin.tar.gz -C /opt/devin bin/devin       && rm /tmp/devin.tar.gz       && chown -R root:root /opt/devin && chmod 0755 /opt/devin/bin/devin       && ln -s /opt/devin/bin/devin /opt/agora/bin/devin       && /opt/agora/bin/devin --version       && rm -rf /root/.config/devin /root/.local/share/devin /root/.cache/devin;     elif [ "$rc" != 75 ]; then exit "$rc"; fi
+# Print what the image lacks (also in `docker build --progress=plain`), and make the file root-owned and read-only
+RUN chmod 0644 /opt/agora/missing-clis  && if [ -s /opt/agora/missing-clis ]; then echo "=== agora-box: CLIs missing from this image ===" >&2; cat /opt/agora/missing-clis >&2; fi
 RUN test -z "$(find /home/agent -mindepth 1 ! -user 1000 -print -quit)"
 # What agora-host, agora-mcp and box/ were built from (scripts/box-build-id.sh): boxd rebuilds a
 # box whose container has another build than the current image. Last, so it busts no cache.

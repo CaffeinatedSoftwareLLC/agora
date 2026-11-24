@@ -48,6 +48,17 @@ describe('box list', () => {
     expect(screen.getByTestId('github-credential')).toHaveTextContent('@octocat');
   });
 
+  it('says the image has no CLI for the agent, and offers no login for it', async () => {
+    boxes = [box({ adapter: 'devin', loginState: 'none', cliMissing: { code: 'download_unavailable', detail: 'HTTP 403' } })];
+    renderSection();
+    const row = await screen.findByTestId('box-builder');
+    expect(within(row).getByTestId('box-cli-missing')).toHaveTextContent(
+      'Devin is not in this box image: its download was not available when the image was built. Other agents are unaffected.');
+    expect(within(row).getByTestId('box-state')).toHaveTextContent('CLI missing');
+    expect(within(row).queryByRole('button', { name: 'Log in' })).toBeNull();
+    expect(within(row).queryByTestId('box-login-hint')).toBeNull();
+  });
+
   it('says a running box cannot log in, and which domain to allow, instead of "running"', async () => {
     boxes = [
       box({ id: 'A'.repeat(26), name: 'blocked', loginState: 'failed', loginError: 'needs_domain', loginBlockedHosts: ['platform.claude.com'] }),

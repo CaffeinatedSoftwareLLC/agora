@@ -220,6 +220,7 @@ prepare_sandbox_network "$DIR" "$INST"
 step upgrade.start 'Starting the new release'
 compose_in "$DIR" up -d --remove-orphans
 wait_up
+warn_missing_box_clis "$DIR"
 verify_sandbox_network "$DIR" "$INST"
 FINISHED=1
 send_install_report ok null

@@ -8,7 +8,7 @@ import { sessionUpdate, type Notice } from '../lib/agent-runs';
 import { CARD_SELECT, CARD_STATUSES, cardJson, cardLabel, cardUpdate, kickoffText, notifyCardReview } from '../lib/task-cards';
 import { sanitizeMessageText } from '../lib/sanitize-text';
 import {
-    CommandError, SESSION_SELECT, announce, botInChannel, profileByName, refuseAtLimit, requireOwnerForSubscription,
+    CommandError, SESSION_SELECT, announce, botInChannel, profileByName, refuseAtLimit, requireBoxCli, requireOwnerForSubscription,
 } from './agent-commands';
 
 /**
@@ -59,6 +59,7 @@ export async function startCard(db: any, channelId: string, taskId: string, user
     if (!card || card.profile_id !== peek.profile_id || card.session_id !== peek.session_id) throw new CommandError(409, { error: 'card_changed' });
 
     await requireOwnerForSubscription(db, wakeAuthMode(profile), profile.server_id, userId, profile.plan_owner_id);
+    await requireBoxCli(db, profile.id.trim(), profile.adapter);
     const botId = profile.bot_id.trim();
     await botInChannel(db, botId, channelId);
 

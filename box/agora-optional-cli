@@ -1,0 +1,73 @@
+#!/bin/sh
+# Build-time helper for the box image's third-party CLIs (box/Dockerfile, docs/agent-boxes.md §6.1).
+# Each CLI is installed in its own step through this script, so a vendor that deleted a pinned file
+# (404/403/410), a registry or CDN that is down, or a DNS failure cannot fail the image build:
+# the CLI is recorded in /opt/agora/missing-clis and the build goes on without it.
+#
+#   agora-optional-cli fetch NAME URL SHA256 OUT   download URL to OUT and check its sha256
+#   agora-optional-cli npm   NAME SPEC             npm install -g SPEC (pkg@version)
+#
+# Exit status: 0 = installed, 75 = not available (recorded, warning printed), anything else = a
+# hard failure. A checksum mismatch on a file that DID download, an npm integrity error, a bad
+# invocation: never skipped, never replaced by another version, so a tampered or unexpected binary
+# is never installed. The caller runs the CLI's `--version` afterwards; that failing fails the build.
+#
+# /opt/agora/missing-clis: one line per missing CLI, `name<TAB>code<TAB>detail`. The code is
+# `download_unavailable` (the vendor's file or version is gone, or answered an error) or
+# `download_failed` (network, DNS, timeout). agora-host in the box reads it (src/box.ts missingCli).
+set -u
+MISSING=${AGORA_MISSING_FILE:-/opt/agora/missing-clis}
+
+skip() { # name code detail
+    printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$MISSING"
+    echo "WARNING: agora-box: $1 is NOT in this box image: its download was not available when the image was built ($3). Other agents are unaffected." >&2
+    exit 75
+}
+
+case "${1:-}" in
+fetch)
+    [ $# -eq 5 ] || { echo "usage: agora-optional-cli fetch NAME URL SHA256 OUT" >&2; exit 2; }
+    name=$2; url=$3; sum=$4; out=$5
+    rm -f "$out"
+    # %{http_code} is 000 when nothing came back; curl's own exit status covers the rest. No -f, so
+    # the status is seen here and an error page is never kept as the file.
+    code=$(curl -sSL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 900 --proto '=https' -o "$out" -w '%{http_code}' "$url" 2>"${TMPDIR:-/tmp}/agora-curl.err")
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        rm -f "$out"
+        skip "$name" download_failed "curl exit $rc: $(tr '\n' ' ' < "${TMPDIR:-/tmp}/agora-curl.err" | cut -c1-120)"
+    fi
+    case "$code" in
+        200) ;;
+        *) rm -f "$out"; skip "$name" download_unavailable "HTTP $code" ;;
+    esac
+    # The file came down: from here on a mismatch is an error, never a skip and never another version
+    if ! echo "$sum  $out" | sha256sum -c - >&2; then
+        echo "ERROR: agora-box: $name: the downloaded file does not match its pinned sha256 ($sum); refusing to install it" >&2
+        rm -f "$out"
+        exit 1
+    fi
+    ;;
+npm)
+    [ $# -eq 3 ] || { echo "usage: agora-optional-cli npm NAME SPEC" >&2; exit 2; }
+    name=$2; spec=$3
+    if npm install -g --no-audit --no-fund --fetch-retries=3 "$spec" >"${TMPDIR:-/tmp}/agora-npm.log" 2>&1; then
+        cat "${TMPDIR:-/tmp}/agora-npm.log"
+        exit 0
+    fi
+    cat "${TMPDIR:-/tmp}/agora-npm.log" >&2
+    # npm checks each tarball against the integrity the registry published: a mismatch is never skipped
+    if grep -qiE 'EINTEGRITY|integrity checksum failed' "${TMPDIR:-/tmp}/agora-npm.log"; then
+        echo "ERROR: agora-box: $name: $spec failed npm's integrity check; refusing to install it" >&2
+        exit 1
+    fi
+    # The pinned version is gone (npm E404/ETARGET/E410/notarget) or the registry could not be reached
+    if grep -qE 'E404|E410|ETARGET|notarget|No matching version' "${TMPDIR:-/tmp}/agora-npm.log"; then
+        skip "$name" download_unavailable "npm: $spec is not on the registry"
+    fi
+    skip "$name" download_failed "npm install failed: $(grep -m1 -E 'npm (error|ERR!)' "${TMPDIR:-/tmp}/agora-npm.log" | cut -c1-120)"
+    ;;
+*)
+    echo "usage: agora-optional-cli fetch|npm ..." >&2; exit 2
+    ;;
+esac

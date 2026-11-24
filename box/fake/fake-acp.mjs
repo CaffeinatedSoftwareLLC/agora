@@ -26,7 +26,7 @@ import { basename, dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 
 const CLI = basename(process.argv[1] ?? '').replace(/\.mjs$/, '') === 'devin' ? 'devin' : 'opencode';
-const VERSION = CLI === 'devin' ? '3000.11.234' : '1.18.34';
+const VERSION = CLI === 'devin' ? '3000.14.30821' : '1.18.34';
 let args = process.argv.slice(2);
 // On Windows agora-host gives Devin a home of its own in the state directory instead (adapters.ts devinDirs)
 const windowsDevin = CLI === 'devin' && process.platform === 'win32' && !process.env.XDG_CONFIG_HOME;

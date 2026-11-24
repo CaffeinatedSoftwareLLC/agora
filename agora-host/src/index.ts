@@ -8,11 +8,28 @@ import { describeAuth, HostConfigError, profileReport } from './terms.js';
 import { siwcCommand } from './siwc/cli.js';
 import { autostartCommand } from './autostart.js';
 import { creditLine } from './openrouter.js';
-import { boxConfigCommand, inBox } from './box.js';
+import { boxConfigCommand, inBox, missingCli } from './box.js';
 import { boxRelayCommand } from './box-shell.js';
 import { runAsAgentServer } from './box-as-agent.js';
 import { liveLoop } from './live-terminal.js';
 import { devinCommand } from './devin.js';
+
+/**
+ * The box has no CLI for its agent: keep the host (and the owner's terminal) up, tell Agora why every
+ * minute (that also keeps the box "seen"), and claim no runs.
+ */
+async function idleWithoutCli(config: Awaited<ReturnType<typeof loadConfig>>, absent: Record<string, ReturnType<typeof missingCli>>) {
+    const client = new Client(config.instance, config.hostToken);
+    const report = profileReport(config.profiles).map(p => ({ ...p, cliMissing: absent[p.name] ?? null }));
+    for (const [name, m] of Object.entries(absent)) console.error(`WARNING: profile ${name} (${config.profiles[name]!.adapter}): its CLI is not in this box image (${m!.code}: ${m!.detail}). Agents on it cannot start; other agents are unaffected.`);
+    const shell = new AbortController();
+    void runAsAgentServer(config, { signal: shell.signal, log: code => console.error(code) }).catch(() => console.error('as_agent_loop_failed'));
+    const send = async () => { try { await client.reportProfiles(report); } catch (err) { console.error(`profile_report_failed ${errorCode(err)}`); } };
+    await send();
+    const timer = setInterval(() => void send(), 60_000);
+    await new Promise<void>(resolve => { process.once('SIGINT', resolve); process.once('SIGTERM', resolve); });
+    clearInterval(timer); shell.abort();
+}
 
 async function main() {
     // agora-host siwc <login|status|logout> --profile <name> --config <file> (docs/codex-chatgpt-plan.md)
@@ -27,6 +44,10 @@ async function main() {
     if (process.argv[2] === 'devin') { process.exitCode = await devinCommand(process.argv.slice(3)); return; }
     if (process.argv.length !== 4 || process.argv[2] !== '--config') throw new Error('usage');
     const config = await loadConfig(process.argv[3]);
+    // A box whose image was built without this agent's CLI (its download was not available): nothing to verify
+    // or run. Report it so Agora shows the reason and refuses to start the agent, and stay up (docs/agent-boxes.md §6.1)
+    const absent = inBox() ? Object.entries(config.profiles).map(([name, p]) => [name, missingCli(p.adapter)] as const).filter(([, m]) => m !== null) : [];
+    if (absent.length) { await idleWithoutCli(config, Object.fromEntries(absent)); return; }
     for (const [name, profile] of Object.entries(config.profiles)) {
         const version = await verifyProfile(profile);
         const via = profile.protocol === 'acp' ? ` over ACP (${version})` : '';

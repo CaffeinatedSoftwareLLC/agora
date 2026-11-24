@@ -4,7 +4,7 @@ import { join, posix } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { childEnv, prepare, testedCliVersion, verifyProfile } from '../src/adapters.js';
 import { BOX_ADAPTERS } from '../src/box-adapters.js';
-import { boxConfig, boxConfigCommand, boxMode, inBox, originMatches, proxyVars, readBoxProfile, repoDir } from '../src/box.js';
+import { boxConfig, boxConfigCommand, boxMode, inBox, missingCli, originMatches, proxyVars, readBoxProfile, repoDir } from '../src/box.js';
 import { configSchema, type Config } from '../src/config.js';
 import { ProcessRunner } from '../src/process.js';
 import { git } from '../src/workspaces.js';
@@ -368,5 +368,21 @@ describe('opencode in a box', () => {
         expect(call.envNames).toContain('OPENROUTER_API_KEY');
         expect(call.envNames).not.toContain('AGORA_HOST_TOKEN');
         expect(call.envNames).not.toContain('AGORA_HOST_IN_BOX');
+    });
+});
+
+describe('a CLI the box image was built without', () => {
+    it('missingCli reads the image\'s record, one line per CLI, and nothing else', async () => {
+        const t = await tempDir(); cleanups.push(t.cleanup);
+        const file = join(t.dir, 'missing-clis');
+        expect(missingCli('devin', file)).toBeNull();                     // no file: the image has every CLI (or is the test image)
+        await writeFile(file, 'devin\tdownload_unavailable\tHTTP 403\nomp\tdownload_failed\tcurl exit 6: could not resolve\n');
+        expect(missingCli('devin', file)).toEqual({ code: 'download_unavailable', detail: 'HTTP 403' });
+        expect(missingCli('omp', file)).toEqual({ code: 'download_failed', detail: 'curl exit 6: could not resolve' });
+        expect(missingCli('claude', file)).toBeNull();
+        // An unknown code is read as "unavailable"; control characters in the detail never get through
+        await writeFile(file, 'codex\tweird\tbad\u001b[31m detail\n');
+        expect(missingCli('codex', file)).toEqual({ code: 'download_unavailable', detail: 'bad[31m detail' });
+        expect(boxMode.missingFile).toBe('/opt/agora/missing-clis');
     });
 });

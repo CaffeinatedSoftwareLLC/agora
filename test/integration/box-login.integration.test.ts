@@ -216,3 +216,26 @@ it('only the CLI provider domains count as a login blocker', async () => {
     expect((await report(box, id, { status: 'failed', error: 'login_failed' })).status).toBe(200);
     expect((await ownerLogin(box)).error).toBe('login_failed');
 });
+
+// The image was built without this agent's CLI (its pinned download was not available, box/agora-optional-cli):
+// the box's host reports it, Settings shows it, and starting the agent is refused with the reason. Other boxes are unaffected.
+it('a box whose image lacks its CLI shows why, and its agent will not start', async () => {
+    const box = await makeBox('nocli', 'claude');
+    const other = await makeBox('hascli', 'codex');
+    const nameOf = async (b: Box) => (await ctx.db.query(`SELECT p.name FROM agent_boxes x JOIN agent_profiles p ON p.id = x.profile_id WHERE x.id = $1`, [b.id])).rows[0].name;
+    const name = await nameOf(box);
+    expect((await listed(box)).cliMissing).toBeNull();
+    const rep = await ctx.request.post('/agent-hosts/@me/profiles').set(box.host).send({ profiles: [{ name, adapter: 'claude', authMode: 'subscription', apiKeyEnv: null,
+        runApproval: false, cliMissing: { code: 'download_unavailable', detail: 'HTTP 403' } }] });
+    expect([rep.status, rep.body.updated]).toEqual([200, [name]]);
+    expect((await listed(box)).cliMissing).toEqual({ code: 'download_unavailable', detail: 'HTTP 403' });
+    expect((await listed(other)).cliMissing).toBeNull();
+    const start = (profile: string) => ctx.request.post(`/channels/${channelId}/agent-commands`).set(owner.auth).send({ command: 'start', profile });
+    const refused = await start(name);
+    expect([refused.status, refused.body.error]).toEqual([409, 'cli_not_in_box_image']);
+    expect(refused.body.message).toBe('Claude Code is not in this box image: its download was not available when the image was built. Other agents are unaffected.');
+    // Unavailable is not an auth change: a bad report still can't flip auth, and a later clean report (a newer image) clears it
+    expect((await ctx.request.post('/agent-hosts/@me/profiles').set(box.host).send({ profiles: [{ name, adapter: 'claude', authMode: 'subscription', apiKeyEnv: null, runApproval: false }] })).status).toBe(200);
+    expect((await listed(box)).cliMissing).toBeNull();
+    expect((await start(name)).body.error).not.toBe('cli_not_in_box_image');
+});
