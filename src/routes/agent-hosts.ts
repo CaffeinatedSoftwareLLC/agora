@@ -579,6 +579,9 @@ export async function agentHostRoutes(app: FastifyInstance) {
                 authMode: { type: 'string', enum: ['subscription', 'api_key', 'siwc'] },
                 apiKeyEnv: { type: ['string', 'null'], pattern: '^[A-Z][A-Z0-9_]{0,63}$' },
                 runApproval: { type: 'boolean' },
+                // A box image built without this agent's CLI (box/agora-optional-cli): why
+                cliMissing: { anyOf: [{ type: 'null' }, { type: 'object', required: ['code', 'detail'], additionalProperties: false, properties: {
+                    code: { type: 'string', enum: ['download_unavailable', 'download_failed'] }, detail: { type: 'string', maxLength: 200 } } }] },
             } } },
         } } },
     }, async (request, reply) => {
@@ -589,7 +592,7 @@ export async function agentHostRoutes(app: FastifyInstance) {
         // differs is refused; a matching one only records that the host checked in.
         const kind = (await db.query(`SELECT kind FROM agent_hosts WHERE id = $1`, [host.id])).rows[0]?.kind;
         if (kind === 'box') {
-            for (const p of (request.body as any).profiles as Array<{ name: string; adapter: string; authMode: string; apiKeyEnv?: string | null; runApproval: boolean }>) {
+            for (const p of (request.body as any).profiles as Array<{ name: string; adapter: string; authMode: string; apiKeyEnv?: string | null; runApproval: boolean; cliMissing?: { code: string; detail: string } | null }>) {
                 const row = (await db.query(
                     `SELECT id, auth_mode, api_key_env, run_approval FROM agent_profiles WHERE host_id = $1 AND server_id = $2 AND name = $3 AND adapter = $4`,
                     [host.id, host.serverId, p.name, p.adapter]
@@ -598,6 +601,8 @@ export async function agentHostRoutes(app: FastifyInstance) {
                 const same = row.auth_mode === p.authMode && (row.api_key_env ?? null) === (p.authMode === 'api_key' ? p.apiKeyEnv ?? null : null) && row.run_approval === p.runApproval;
                 if (!same) return reply.status(409).send({ error: 'box_auth_is_owner_set' });
                 await db.query(`UPDATE agent_profiles SET auth_reported_at = NOW() WHERE id = $1`, [row.id]);
+                await db.query(`UPDATE agent_boxes SET cli_missing_code = $2, cli_missing_detail = $3 WHERE profile_id = $1 AND deleted_at IS NULL`,
+                    [row.id, p.cliMissing?.code ?? null, p.cliMissing?.detail ?? null]);
                 updated.push(p.name);
             }
             return reply.send({ updated, unknown });

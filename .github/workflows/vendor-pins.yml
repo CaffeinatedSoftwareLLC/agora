@@ -1,0 +1,25 @@
+name: Vendor pins
+
+# Early warning: every third-party download box/Dockerfile pins (Claude Code, Codex, opencode on npm; oh-my-pi and
+# Devin release files with their sha256) must still exist. A vendor deleting an old version breaks nothing for
+# users any more (that CLI is skipped, docs/agent-boxes.md §6.1), but its agent can't start, so we want to know
+# first. Does not bump anything.
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pins:
+    name: Pinned vendor downloads still exist
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node scripts/check-vendor-pins.mjs

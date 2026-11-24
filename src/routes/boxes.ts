@@ -48,6 +48,8 @@ export function boxJson(r: any, loginBlocked: string[] = []) {
         deletedAt: r.deleted_at ?? null, volumePurgeAfter: r.volume_purge_after ?? null, policies: r.policies ?? [],
         loginError: r.login_state === 'failed' ? (r.login_error ?? null) : null,
         loginBlockedHosts: loginBlocked,
+        // The box image was built without this agent's CLI (its download was not available): why, from the host's report
+        cliMissing: r.cli_missing_code ? { code: r.cli_missing_code, detail: r.cli_missing_detail ?? '' } : null,
         // The terminal's limits, owner-editable (docs/box-terminal.md)
         terminalIdleMinutes: r.terminal_idle_minutes, terminalMaxHours: r.terminal_max_hours, terminalRateKbps: r.terminal_rate_kbps,
     };

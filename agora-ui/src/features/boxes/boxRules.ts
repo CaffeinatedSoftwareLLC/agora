@@ -101,12 +101,20 @@ export function modelProblem(model: string): string | null {
 }
 
 /** The state chip: what the box is doing, including an owner action boxd hasn't done yet. */
+/** Settings' text when the box image was built without this agent's CLI (docs/agent-boxes.md §6.1); null when it has it. */
+export function cliMissingText(box: Pick<Box, 'adapter' | 'cliMissing'>): string | null {
+  if (!box.cliMissing) return null;
+  return `${ADAPTER_LABEL[box.adapter] ?? box.adapter} is not in this box image: its download was not available when the image was built. Other agents are unaffected.`;
+}
+
 export function stateChip(box: Box): { label: string; tone: string; login?: boolean } {
   if (box.deletedAt || box.desiredState === 'deleted') return { label: 'deleted', tone: 'bg-surface text-text-muted' };
   if (box.pendingAction) return { label: `${box.pendingAction} pending`, tone: 'bg-warn/20 text-warn' };
   if (box.state === 'failed') return boxUpgradeTarget(box) !== null ? { label: 'upgrading', tone: 'bg-warn/20 text-warn' } : { label: 'failed', tone: 'bg-danger/20 text-danger' };
   if (box.state === 'running' && box.desiredState === 'stopped') return { label: 'stopping', tone: 'bg-warn/20 text-warn' };
   if (box.state === 'stopped' && box.desiredState === 'running') return { label: 'starting', tone: 'bg-warn/20 text-warn' };
+  // The image has no CLI for this agent: logging in would not help
+  if (box.cliMissing && box.state === 'running') return { label: 'CLI missing', tone: 'bg-danger/20 text-danger', login: true };
   // A running box whose CLI isn't logged in can't answer anyone: say that, not "running"
   if (box.state === 'running' && box.auth === 'subscription' && box.loginState !== 'logged_in') {
     if (box.loginState === 'failed') return { label: 'login failed', tone: 'bg-danger/20 text-danger', login: true };

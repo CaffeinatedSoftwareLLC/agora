@@ -48,6 +48,8 @@ export interface Box {
   lastError: string | null;
   /** Why it failed, where the server acts on it: 'drift' or 'drift_unverified' (older servers leave it out) */
   lastErrorCode?: string | null;
+  /** Set when the box image was built without this agent's CLI (its download was not available); older servers leave it out */
+  cliMissing?: { code: string; detail: string } | null;
   /** The box image version this server builds new boxes on (older servers leave it out) */
   currentImageVersion?: number;
   lastSeenAt: string | null;

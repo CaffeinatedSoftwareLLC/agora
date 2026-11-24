@@ -143,7 +143,7 @@ export const BOX_ADAPTERS = {
     },
     devin: {
         executable: '/opt/agora/bin/devin',
-        version: '3000.11.234',
+        version: '3000.14.30821',
         protocol: 'acp',
         acpArgs: ['acp'],
         // The owner's own Devin login, relayed into the box (Cognition's terms: account holder only)
@@ -151,7 +151,7 @@ export const BOX_ADAPTERS = {
         // Never set by boxd (no api_key mode): the variable `devin acp` would read an account token from
         apiKeyEnv: 'WINDSURF_API_KEY',
         // `devin auth login` opens a browser on a localhost redirect; this flow prints the sign-in
-        // URL on app.devin.ai and reads the code the owner pastes back (checked on 3000.11.234)
+        // URL on app.devin.ai and reads the code the owner pastes back (checked on 3000.14.30821)
         // (on app.devin.ai; it prints a windsurf.com sign-in link when it can't resolve its deployment)
         login: { args: ['auth', 'login', '--force-manual-token-flow'], hosts: ['devin.ai', 'windsurf.com'], kind: 'paste' },
         // No switches for these: auto-update and every config import are off in the config each run
@@ -169,7 +169,8 @@ export const BOX_ADAPTERS = {
             rulesFile: 'config/devin/AGENTS.md',
             files: {
                 'config/devin/config.json': '{\n  "auto_update": false,\n  "read_config_from": { "agents_standard": false, "cursor": false, "windsurf": false, "claude": false, '
-                    + '"copilot": false, "opencode": false, "zed": false, "cloud": false }\n}\n',
+                    + '"copilot": false, "codex": false, "kiro": false, "opencode": false, "zed": false, "cloud": false },\n'
+                    + '  "process_model": "in-process"\n}\n',
             },
         },
     },

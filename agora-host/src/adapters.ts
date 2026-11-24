@@ -80,7 +80,8 @@ export async function ensureDevinDirs(profile: LocalProfile, platform = process.
     for (const dir of new Set(Object.values(devinDirs(profile.stateDir, platform)))) await mkdir(dir, { recursive: true, mode: 0o700 });
 }
 /** Every source Devin would import settings, rules, skills, hooks or MCP servers from (its docs: read_config_from). */
-const DEVIN_IMPORTS = ['agents_standard', 'cursor', 'windsurf', 'claude', 'copilot', 'opencode', 'zed', 'cloud'] as const;
+// `codex` and `kiro` are import sources 3000.13+ has (read from the 3000.14.30821 docs; 3000.11 ignores unknown keys).
+const DEVIN_IMPORTS = ['agents_standard', 'cursor', 'windsurf', 'claude', 'copilot', 'codex', 'kiro', 'opencode', 'zed', 'cloud'] as const;
 /**
  * Permission rules, as Devin's own reference (bundled with 3000.11.234, docs/reference/
  * permissions.mdx) spells them: whole tools by name (`read`, `edit`, `grep`, `glob`, `exec`, the
@@ -115,7 +116,10 @@ export const DEVIN_WEB_TOOLS = ['web_search', 'webfetch'] as const;
  * asks reaches the host, which allows it unless it is a web tool (acp/session.ts allowAllExcept).
  */
 export function devinConfig(boxed: boolean, agoraTools: readonly string[] = []): string {
-    const base = { auto_update: false, read_config_from: Object.fromEntries(DEVIN_IMPORTS.map(k => [k, false])), otel: { enabled: false }, permission_mode: 'normal' };
+    const base = { auto_update: false, read_config_from: Object.fromEntries(DEVIN_IMPORTS.map(k => [k, false])), otel: { enabled: false }, permission_mode: 'normal',
+        // 3000.13+ runs ACP sessions in a shared background daemon by default; this host owns the session's process
+        // and its lifetime, so it asks for the in-process model that earlier versions had (setting from the docs, not yet seen with a login)
+        process_model: 'in-process' };
     return `${JSON.stringify(boxed
         ? { ...base, permissions: { allow: [...DEVIN_TOOLS, ...DEVIN_WRITES, 'mcp__agora__*'], deny: [...DEVIN_WEB_TOOLS] } }
         : { ...base, permissions: {
@@ -288,8 +292,14 @@ export function ompProbeArgs(profile: LocalProfile, settingsFile: string, boxed 
     return [...profile.acpArgs, ...(boxed ? ['--yolo'] : OMP_HOST_APPROVAL), '--no-extensions', '--no-skills', '--no-rules', '--config', settingsFile];
 }
 
-/** The Devin versions this host was tested with: 3000.11.x (Devin ships every few days). */
-export const DEVIN_TESTED = /^3000\.11\.\d+$/;
+/**
+ * The Devin versions this host accepts without allowUntestedVersion: 3000.11.x and 3000.14.x (Devin ships every
+ * few days). Actually exercised: 3000.11.234 (with no login: `--version`, ACP initialize, its config, permission
+ * rules, XDG paths, 2026-11-06). 3000.14.30821, the box image's pin since 2026-11-24, is accepted after the
+ * checks listed in docs/agent-boxes.md §6.1 (version, `devin acp` initialize, flags and config schema read from
+ * the binary) but NOT after a run on a real Devin login.
+ */
+export const DEVIN_TESTED = /^3000\.1[14]\.\d+$/;
 export async function verifyProfile(profile: LocalProfile): Promise<string> {
     if (profile.adapter === 'omp') {
         // omp is pinned (it releases every few days): its version is checked as well as ACP's,

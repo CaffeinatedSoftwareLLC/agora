@@ -8,7 +8,7 @@ import { MAX_LIMIT, limitStopSummary } from '../lib/agent-budget-notice';
 import { insertBotMessage, MAX_LIVE_SUBTASKS } from '../lib/agent-subtasks';
 import { sanitizeMessageText } from '../lib/sanitize-text';
 import { PLAN_OWNER_ONLY, PLAN_OWNER_ONLY_MESSAGE, SUBSCRIPTION_OWNER_ONLY, SUBSCRIPTION_OWNER_ONLY_MESSAGE, wakeAuthMode } from '../lib/provider-terms';
-import { CommandError, SESSION_SELECT, botInChannel, profileByName, sessionJson } from './agent-commands';
+import { CommandError, SESSION_SELECT, botInChannel, profileByName, requireBoxCli, sessionJson } from './agent-commands';
 
 /**
  * Subtask delegation (docs/task-board.md, src/lib/agent-subtasks.ts).
@@ -72,6 +72,7 @@ export async function subtaskRoutes(app: FastifyInstance) {
                 const childProfile = b.profile ? await profileByName(db, channelId, b.profile)
                     : (await db.query('SELECT * FROM agent_profiles WHERE id = $1 FOR SHARE', [meta.profile_id])).rows[0];
                 await db.query('SELECT 1 FROM agent_profiles WHERE id = $1 FOR SHARE', [meta.profile_id]);
+                await requireBoxCli(db, childProfile.id.trim(), childProfile.adapter);
                 const parent = (await db.query(`SELECT s.*, (SELECT count(*) FROM agent_sessions c WHERE c.parent_session_id = s.id AND c.state = 'live')::int AS live_children,
                         EXISTS (SELECT 1 FROM agent_runs r WHERE r.session_id = s.id AND r.status = 'claimed') AS running
                     FROM agent_sessions s WHERE s.id = $1 FOR UPDATE OF s`, [b.parentSessionId])).rows[0];

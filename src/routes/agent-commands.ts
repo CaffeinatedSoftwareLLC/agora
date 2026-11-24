@@ -6,6 +6,7 @@ import { countingBot } from '../lib/owner-bot-authority';
 import { displayName } from '../lib/message-envelope';
 import { snapshots } from '../lib/run-stream';
 import { asService } from '../lib/agent-sessions';
+import { boxAdapterSpec, cliMissingMessage } from '../lib/boxes/adapters';
 import { limitReached, postNotice, postSessionNotice, sessionUpdate, type Notice } from '../lib/agent-runs';
 import { LIMIT_SCHEMA, limitOf, limitStopSummary } from '../lib/agent-budget-notice';
 import { expireLiveRequests } from '../lib/agent-permissions';
@@ -126,6 +127,17 @@ export async function profileByName(db: any, channelId: string, name: string) {
     );
     if (!row.rows[0]) throw new CommandError(404, { error: 'unknown_profile' });
     return row.rows[0];
+}
+
+/**
+ * A box whose image was built without this agent's CLI (its download was not available, box/agora-optional-cli)
+ * can't run it: refuse to start it, with the reason (docs/agent-boxes.md §6.1). Other agents are unaffected.
+ */
+export async function requireBoxCli(db: any, profileId: string, adapter: string) {
+    const box = (await asService(db, (): Promise<any> => db.query(
+        `SELECT cli_missing_code FROM agent_boxes WHERE profile_id = $1 AND deleted_at IS NULL`, [profileId]))).rows[0];
+    if (!box?.cli_missing_code) return;
+    throw new CommandError(409, { error: 'cli_not_in_box_image', message: cliMissingMessage(boxAdapterSpec(adapter)?.label ?? adapter) });
 }
 
 /**
@@ -371,6 +383,7 @@ async function startSession(db: any, channelId: string, profileName: string, onL
                             userId: string, who: string, notices: Notice[]) {
     const profile = await profileByName(db, channelId, profileName);
     await requireOwnerForSubscription(db, wakeAuthMode(profile), profile.server_id, userId, profile.plan_owner_id);
+    await requireBoxCli(db, profile.id.trim(), profile.adapter);
     const botId = profile.bot_id.trim();
     await botInChannel(db, botId, channelId);
 

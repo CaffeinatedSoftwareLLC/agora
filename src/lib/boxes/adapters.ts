@@ -162,14 +162,14 @@ export const BOX_ADAPTER_REGISTRY = {
     devin: {
         label: 'Devin',
         // Cognition's release tarball (it is not on npm), one per CPU, checked against its sha256
-        // (static.devin.ai/cli/3000.11.234/manifest.json; the x86_64 one also checked by hand)
+        // (static.devin.ai/cli/current/manifest.json, 2026-11-24)
         image: {
-            version: '3000.11.234', versionArg: 'DEVIN_VERSION',
+            version: '3000.14.30821', versionArg: 'DEVIN_VERSION',
             tarball: {
                 url: 'https://static.devin.ai/cli/{version}/devin-{version}-{arch}-unknown-linux.tar.gz',
                 sha256: {
-                    amd64: '201370cddd2924294e3ca6b46fd8ece49b5763953b644a1dd823fce5490cb41a',
-                    arm64: '438ca7f8280b3ef0747afc406e827d9e182156000277a1660358ac4fbd04156e',
+                    amd64: '4dc43e3e4388bace60fe2aa8010cbb399402e724892d7175845b1cdef00e7ddb',
+                    arm64: '3deb8af6b026060e975ed371936e139818020e5dc5abbcba07cde039f473a5a5',
                 },
             },
         },
@@ -217,4 +217,9 @@ export function boxAdapterSpec(adapter: string): BoxAdapterSpec | null {
 /** Whether the owner can press Log in on a box of this adapter (a CLI login to relay). */
 export function boxHasLogin(adapter: string): boolean {
     return boxAdapterSpec(adapter)?.authModes.includes('subscription') ?? false;
+}
+
+/** What Settings and the start refusal say when the box image was built without the adapter's CLI (docs/agent-boxes.md §6.1). */
+export function cliMissingMessage(label: string): string {
+    return `${label} is not in this box image: its download was not available when the image was built. Other agents are unaffected.`;
 }

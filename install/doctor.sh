@@ -84,6 +84,10 @@ else
     else
         fail 'runsc is not registered with Docker (sudo runsc install && sudo systemctl reload docker)'
     fi
+    # CLIs the box image was built without (their pinned download was not available): not a failure, the other agents work
+    while IFS=$'	' read -r mname _ mdetail; do
+        [ -z "$mname" ] || line "warn  box image has no $mname CLI (download not available when it was built: $mdetail); agents that use $mname will not start, the others are unaffected"
+    done < <(missing_box_clis "$DIR")
 fi
 
 head_ 'Configuration (.env.prod: set or not set, values never shown)'

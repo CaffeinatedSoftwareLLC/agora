@@ -167,7 +167,7 @@ export interface HostApi {
 export interface BoxLoginRequest { id: string; adapter: BoxAdapterName; profile: string }
 export type BoxLoginStatus = 'awaiting_user' | 'awaiting_code' | 'succeeded' | 'failed';
 export interface BoxLoginReport { status: BoxLoginStatus; verificationUrl?: string; userCode?: string; error?: string }
-export interface ProfileReport { name: string; adapter: string; authMode: 'subscription' | 'api_key' | 'siwc'; apiKeyEnv: string | null; runApproval: boolean }
+export interface ProfileReport { name: string; adapter: string; authMode: 'subscription' | 'api_key' | 'siwc'; apiKeyEnv: string | null; runApproval: boolean; cliMissing?: { code: string; detail: string } | null }
 /** A Settings → Agents request for this host to connect or disconnect a ChatGPT plan. */
 export interface PlanRequest { profile: string; action: 'connect' | 'disconnect'; requestedBy: string | null }
 export type PlanStatus = 'in_progress' | 'connected' | 'scope_missing' | 'failed' | 'disconnected';

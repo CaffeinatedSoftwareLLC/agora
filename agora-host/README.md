@@ -528,7 +528,7 @@ three of the worktree's language servers.
 
 ### Devin
 
-A `devin` profile runs Devin's own ACP server (`devin acp`, Devin CLI 3000.11) on your own
+A `devin` profile runs Devin's own ACP server (`devin acp`, Devin CLI 3000.14; 3000.11 also passes) on your own
 Devin login. Only `adapter`, `executable`, `workdir`, `workdirAlias`, `stateDir` and, on a
 machine, `allowUnverifiedApprovals` are needed; `protocol` defaults to `"acp"`, `acpArgs` to
 `["acp"]` and `auth` stays `"subscription"`. Anything else (`protocol: "cli"`,
@@ -597,7 +597,7 @@ rule today.) A `.devin/config.local.json` left by your own Devin use in a parent
 too: move it, or run the agent in a box.
 
 **Version.** The host checks `devin --version` (Devin's ACP server calls itself `0.0.0-dev`):
-3000.11.x passes; anything else needs `"allowUntestedVersion": true`. Turn Devin's own
+3000.11.x and 3000.14.x pass (3000.14 was not run on a real login); anything else needs `"allowUntestedVersion": true`. Turn Devin's own
 auto-update off (`"auto_update": false` in your Devin config) if you don't want a new
 version to stop the agent at its next start.
 
@@ -747,5 +747,5 @@ In an agent box (`docs/agent-boxes.md`) agora-host runs inside the box's contain
   - `proxyEnv` passes `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` (and their lowercase copies) to the CLI, on top of the usual OS allowlist. Nothing else is added: the CLI never sees the host token, and gets the bot token only as `AGORA_BOT_TOKEN` for the agora-mcp server it starts, as on a machine.
   - On a machine, none of this happens: the bypass flags are never passed, and `proxyEnv` is ignored.
 - **Log in** (`src/box-login.ts`). The host polls `GET /agent-hosts/@me/box-login` every 3 seconds. For a claimed request it runs, without a shell, `codex login --device-auth` (`CODEX_HOME` = the state dir), `claude auth login --claudeai` (`CLAUDE_CONFIG_DIR` = the state dir) or `devin auth login --force-manual-token-flow` (Devin's XDG directories in the state dir; a URL only on `devin.ai` or `windsurf.com`, then the pasted code, as for Claude; a pasted code may be up to 4096 characters, since Devin's can be a whole token). It reads the CLI's output (terminal escapes removed, a URL only on `openai.com`/`chatgpt.com` or `claude.ai`/`claude.com`/`anthropic.com`), reports `awaiting_user` with Codex's URL and code or `awaiting_code` with Claude's URL, and for Claude polls `GET .../box-login/<id>/code` every 2 seconds and writes the owner's pasted code to the CLI's input. The CLI's exit is reported as `succeeded` or `failed`; after 10 minutes (or 60 seconds without a prompt) the CLI is stopped and the login fails. A `404`/`409` from Agora (the owner cancelled, or the login expired) stops the CLI with no further report. The URL, the codes and the CLI's output are never logged. *Verify live:* both logins with real accounts.
-- **Image.** `box/Dockerfile` builds agora-host and agora-mcp from the checkout and installs Claude Code 2.1.311, Codex 0.163.0, opencode 1.18.34 and Devin 3000.11.234 (the families the host verifies, so no `allowUntestedVersion`; Devin from its sha256-checked release tarball). The fake ACP CLI (`box/fake/fake-acp.mjs`) plays opencode or Devin by its file name, with Devin's paste login. The `test` target swaps them for fake CLIs (`box/fake/fake-cli.mjs`) that answer `--version`, one headless turn (and post `fake-<cli> reply` to the wake's channel), and both logins; they need a fake login (`.fake-login` in the state dir) or an API key to answer a turn.
+- **Image.** `box/Dockerfile` builds agora-host and agora-mcp from the checkout and installs Claude Code 2.1.311, Codex 0.163.0, opencode 1.18.34 and Devin 3000.14.30821 (the families the host verifies, so no `allowUntestedVersion`; Devin from its sha256-checked release tarball). The fake ACP CLI (`box/fake/fake-acp.mjs`) plays opencode or Devin by its file name, with Devin's paste login. The `test` target swaps them for fake CLIs (`box/fake/fake-cli.mjs`) that answer `--version`, one headless turn (and post `fake-<cli> reply` to the wake's channel), and both logins; they need a fake login (`.fake-login` in the state dir) or an API key to answer a turn.
 - **Pull requests.** `agora-pr create --title T (--body B | --body-file F) [--base B] [--head H] [--draft]` and `agora-pr status <n>` talk to the edge's PR broker. Exit codes: 0 done, 1 refused or failed, 2 usage, 3 needs the owner's approval (run it again after approval), 4 not in a box repo, 5 the edge didn't answer.

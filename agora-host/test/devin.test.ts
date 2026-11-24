@@ -149,7 +149,7 @@ describe('devin child environment', () => {
 });
 
 describe('devin config', () => {
-    const IMPORTS = ['agents_standard', 'claude', 'cloud', 'copilot', 'cursor', 'opencode', 'windsurf', 'zed'];
+    const IMPORTS = ['agents_standard', 'claude', 'cloud', 'codex', 'copilot', 'cursor', 'kiro', 'opencode', 'windsurf', 'zed'];
     it('on a machine: no imports or updates, every tool asks, .devin/ can\'t be written, the owner\'s Agora tools allowed', () => {
         const c = JSON.parse(devinConfig(false, ['chat_send', 'chat_history', 'chat_send']));
         expect(c.auto_update).toBe(false);
@@ -157,6 +157,7 @@ describe('devin config', () => {
         expect(Object.values(c.read_config_from).every(v => v === false)).toBe(true);
         expect(c.otel).toEqual({ enabled: false });
         expect(c.permission_mode).toBe('normal');
+        expect(c.process_model).toBe('in-process');
         // Devin's documented tool names, and Write() for the write tool and for paths
         expect(c.permissions).toEqual({ allow: ['mcp__agora__chat_send', 'mcp__agora__chat_history'],
             ask: ['read', 'edit', 'grep', 'glob', 'exec', 'Write(**)', 'Write(/**)'],
@@ -322,8 +323,8 @@ describe.skipIf(!unix)('devin start-up check', () => {
     it('the pinned line passes with its version; another one only with allowUntestedVersion', async () => {
         const dir = await repo();
         const exe = await fakeDevin();
-        expect(await verifyProfile(devin(dir, { executable: exe }).profiles.builder)).toBe('devin 3000.11.234, acp/1 0.0.0-dev');
-        const newer = await fakeDevin(s => s.replace("'3000.11.234'", "'3000.12.1'"));
+        expect(await verifyProfile(devin(dir, { executable: exe }).profiles.builder)).toBe('devin 3000.14.30821, acp/1 0.0.0-dev');
+        const newer = await fakeDevin(s => s.replace("'3000.14.30821'", "'3000.12.1'"));
         await expect(verifyProfile(devin(dir, { executable: newer }).profiles.builder)).rejects.toThrow('unsupported_cli_version');
         expect(await verifyProfile(devin(dir, { executable: newer, allowUntestedVersion: true }).profiles.builder)).toBe('devin 3000.12.1, acp/1 0.0.0-dev');
         // The probe got a run's config (nothing imported, no update) and ran in the state directory

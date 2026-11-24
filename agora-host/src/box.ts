@@ -14,9 +14,29 @@ import { HostConfigError } from './terms.js';
 export const boxMode = {
     /** The image's marker file. Tests point this at a temporary file; nothing else changes it. */
     marker: '/etc/agora-box',
+    /** The CLIs the image was built without (box/agora-optional-cli writes it); absent in the test image. */
+    missingFile: '/opt/agora/missing-clis',
 };
 export function inBox(env: NodeJS.ProcessEnv = process.env): boolean {
     return env.AGORA_HOST_IN_BOX === '1' && existsSync(boxMode.marker);
+}
+
+/** A CLI whose pinned download was not available when the image was built. */
+export interface MissingCli { code: 'download_unavailable' | 'download_failed'; detail: string }
+
+/**
+ * Why this adapter's CLI is not in the box image, or null when it is (docs/agent-boxes.md §6.1). The file is
+ * root-owned in the read-only image, one line per CLI: `name<TAB>code<TAB>detail`. Only in a box.
+ */
+export function missingCli(adapter: string, file: string = boxMode.missingFile): MissingCli | null {
+    let text: string;
+    try { text = readFileSync(file, 'utf8'); } catch { return null; }
+    for (const line of text.split(/\r?\n/)) {
+        const [name, code, ...rest] = line.split('\t');
+        if (name !== adapter) continue;
+        return { code: code === 'download_failed' ? 'download_failed' : 'download_unavailable', detail: rest.join(' ').replace(/[^ -~]/g, '').slice(0, 200) };
+    }
+    return null;
 }
 
 /**
