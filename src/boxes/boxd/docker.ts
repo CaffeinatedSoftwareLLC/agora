@@ -81,7 +81,11 @@ export class BoxDocker implements BoxDockerApi {
         // The MAC is pinned too (Docker's own scheme, 02:42 and the address): a recreated edge gets a new random one
         // otherwise, and a gVisor box keeps sending to the old one for about 45 seconds (docs/agent-boxes.md section 9.3)
         const mac = `02:42:${ipv4.split('.').map(o => Number(o).toString(16).padStart(2, '0')).join(':')}`;
-        await this.docker.getNetwork(network).connect({ Container: container, EndpointConfig: { IPAMConfig: { IPv4Address: ipv4 }, MacAddress: mac } });
+        await this.docker.getNetwork(network).connect({ Container: container, EndpointConfig: {
+            IPAMConfig: { IPv4Address: ipv4 }, MacAddress: mac,
+            // Engine 28.0 ignores MacAddress on a connect; this driver option is the way it takes one there
+            DriverOpts: { 'com.docker.network.endpoint.macaddress': mac },
+        } });
     }
     async disconnectNetwork(network: string, container: string) {
         await ignore404(this.docker.getNetwork(network).disconnect({ Container: container, Force: true }));
