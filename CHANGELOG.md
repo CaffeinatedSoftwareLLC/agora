@@ -6,7 +6,7 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ### Fixed
 
-- **After the box edge was recreated (a deploy, an upgrade), boxes could stay cut off from Agora for up to about 15 seconds, and a database connection ended under an idle pool could stop boxd, the edge, the gateway or the runner.** boxd re-attached the edge to the box networks only in its full 15-second pass, which a slow pass (boxes being created) delayed further; it now checks the edge's attachment every 3 seconds, so boxes are back within about 4 seconds (7.5 to 14.3 s before, measured with a forced recreate). The four processes now log an idle database connection error as one line instead of exiting on it with a dump of the connection object.
+- **After the box edge was recreated (a deploy, an upgrade), boxes could stay cut off from Agora for up to about 15 seconds, and a database connection ended under an idle pool could stop boxd, the edge, the gateway or the runner.** boxd re-attached the edge to the box networks only in its full 15-second pass, which a slow pass (boxes being created) delayed further; it now checks the edge's attachment every 3 seconds, so boxes are back within about 4 seconds (7.5 to 14.3 s before, measured with a forced recreate). The edge is also attached with a fixed MAC: under gVisor a box kept sending to the old edge's MAC and could not reach Agora for 40 to 50 seconds after a recreate (the cause of the failing box recovery test on CI). The four processes now log an idle database connection error as one line instead of exiting on it with a dump of the connection object.
 
 ## 0.4.5 — 2026-11-24
 

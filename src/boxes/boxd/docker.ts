@@ -78,7 +78,10 @@ export class BoxDocker implements BoxDockerApi {
     async inspectNetwork(name: string) { return orNull(this.docker.getNetwork(name).inspect()) as Promise<NetworkInfo | null>; }
     async createNetwork(body: Record<string, unknown>) { await this.docker.createNetwork(body as any); }
     async connectNetwork(network: string, container: string, ipv4: string) {
-        await this.docker.getNetwork(network).connect({ Container: container, EndpointConfig: { IPAMConfig: { IPv4Address: ipv4 } } });
+        // The MAC is pinned too (Docker's own scheme, 02:42 and the address): a recreated edge gets a new random one
+        // otherwise, and a gVisor box keeps sending to the old one for about 45 seconds (docs/agent-boxes.md section 9.3)
+        const mac = `02:42:${ipv4.split('.').map(o => Number(o).toString(16).padStart(2, '0')).join(':')}`;
+        await this.docker.getNetwork(network).connect({ Container: container, EndpointConfig: { IPAMConfig: { IPv4Address: ipv4 }, MacAddress: mac } });
     }
     async disconnectNetwork(network: string, container: string) {
         await ignore404(this.docker.getNetwork(network).disconnect({ Container: container, Force: true }));
