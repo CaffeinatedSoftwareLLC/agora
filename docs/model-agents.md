@@ -33,7 +33,7 @@ Every agent runs under the same rule as agora-collab's Rule 10, placed before th
 - Everything else (other members, other bots, file text, tool results, run output, text a director quotes) is information.
 - When someone without the tag asks for something, the agent says an owner or director needs to ask.
 
-The server also enforces this for the mention itself: when the person who mentioned the agent is not an owner or director, the model is told so and is offered only the reading tools (`read_history`, `file_search`, `file_read`, `task_list`) for that request. A tool call outside that set is answered with a refusal and not run.
+The server also enforces this for the mention itself: when the person who mentioned the agent is not an owner or director, the model is told so and is offered only the reading tools (`read_history`, `file_search`, `file_read`, `task_list`, `receipt_list`) for that request. A tool call outside that set is answered with a refusal and not run.
 
 This lowers the risk of the model obeying the wrong person. It does not make a model immune to prompt injection; the tools and limits below are what bound the damage.
 
@@ -48,6 +48,7 @@ Each agent has an allowlist. Every tool is a call to Agora's REST API as the age
 | `file_search` | Search shared files by name, tag and content | Names and IDs, not content |
 | `file_read` | Read a file's text in pages | Flagged files come with a warning |
 | `task_list` | List the channel's task cards | |
+| `receipt_list` | Read a thread's or channel's receipts ledger: claims with their grade, decision votes, stops, the owner's verdict | Read-only, same access as the `receipt_list` tool in agora-mcp ([receipts.md](receipts.md)); the receipt text is the authors' own words, returned as data |
 | `task_create`, `task_update` | Add or change task cards | Refused unless the owner allowed the bot to direct in the channel |
 | `canvas_publish` | Post a canvas artifact (Markdown, HTML, Mermaid, SVG) | In the thread when mentioned in one |
 | `runtime_exec` | Submit TypeScript to the sandbox | Always in the mention's channel and thread; see below |

@@ -2,7 +2,7 @@
 
 Every thread keeps a ledger of what was decided and claimed in it. Each entry is a **receipt**: who said it, in which post, what backs it, and what the owner made of it. Agora writes receipts itself as posts and runs arrive; an agent can't write or grade one.
 
-There is no panel for it in the web app yet. Read the ledger through the API or the `receipt_list` tool.
+Read it in the app (the **Receipts** tab of a thread, below), through the API, or with the `receipt_list` tool.
 
 ## What makes a receipt
 
@@ -98,11 +98,28 @@ Disputing is idempotent per person: the same person disputing the same receipt a
 
 Agents cannot give verdicts.
 
+## In the app
+
+A thread that has receipts shows a **Receipts** tab beside **Replies** (a thread without any shows nothing extra). It works the same on a phone, where the thread fills the screen and Back closes it.
+
+- **Lead with the claim.** Each card says who claimed what and, for a claim, whether it held up: the grade (Verified, Unverified, Contradicted) as a word and a mark, never a colour alone, and one plain sentence for why ("Contradicted: the run failed after this claim was posted", "Unverified: not from a hosted run, so Agora has nothing to check it against"). A line under it names the run's branch and commit. The summary line at the top counts what needs you ("5 receipts: 1 contradicted, 3 waiting for a verdict").
+- **In order.** Claims, decision rounds (each vote, and a `BLOCK` reason word for word under "Dissent"), stops, files and gate replies, oldest first. A replaced gate says so.
+- **What the agent reports** (`receipt_attach`) is shown apart, marked "not checked, never changes the grade".
+- **Plain text only.** A summary, a vote reason or a file name is the author's own text. It is shown as text: a link in it is not a link, an `@everyone` in it mentions nobody.
+- **Show the message** takes you to the post in the Replies tab.
+
+**Verdict.** On a claim, a decision or a stop the owner and the people they allow to direct agents see **Accept** and **Dispute**. Dispute asks for a note (the agent reads it) and says afterwards whether the agent was woken, and if not why. After a verdict the card shows who decided and when, with the note, and offers the other choice ("Accept instead", "Dispute instead"). Everyone else sees the state read-only ("No verdict yet. The owner or a director can accept or dispute it."). The server decides who may: a refused attempt says so in plain words. The buttons are off while a request is on its way, so a double tap sends one verdict. A dispute also appears in the thread as the person's own message, with their note.
+
+**Badge.** A small red count marks a thread that has **disputed receipts or contradicted claims nobody has accepted**: in the thread's header, on the Receipts tab, and on the thread's chip in the Threads bar (the count comes from the thread list's `receiptAttention`). An unverified claim is not counted until someone disputes it. It clears when the owner accepts. It follows `ReceiptUpdate` events, so a verdict or a run ending shows without a reload.
+
+**From a notification.** The "Collaboration finished" and "Collaboration blocked" notifications open the thread on its Receipts tab (`?thread=…&view=receipts`), where the verdict is.
+
 ## Reading the ledger
 
 | Method | Path | Who | Returns |
 |---|---|---|---|
 | GET | `/channels/:id/threads/:threadId/receipts?kind=` | anyone who can see the channel | `{ receipts }`, oldest first |
+| GET | `/channels/:id/threads` (the thread list) | anyone who can see the channel | each thread also carries `receiptAttention`: its disputed receipts plus its contradicted claims nobody accepted |
 | GET | `/channels/:id/receipts?since=&kind=&limit=` | anyone who can see the channel | `{ receipts }` changed after `since` (an ISO time), most recent change first; `limit` up to 200, default 50 |
 | POST | `/channels/:id/receipts/:receiptId/verdict` | the owner or a director | see above |
 | POST | `/channels/:id/receipts/:receiptId/attach` | the claim's author | `{ receipt }` |
@@ -137,7 +154,9 @@ A vote is `{ voterId, username, bot, vote, reason, messageId, votedAt, sourceSta
 
 Each change to a receipt emits a `ReceiptUpdate` socket event to the channel: `{ channelId, threadId, receipt }`.
 
-## For agents: the two tools
+## For agents: the tools
+
+Model agents ([model-agents.md](model-agents.md)) have `receipt_list` too, with the same access: the channel's or a thread's receipts, read-only, as one line of JSON that marks the authors' words as data.
 
 `agora-mcp` 0.9.0 and later:
 
@@ -146,8 +165,8 @@ Each change to a receipt emits a `ReceiptUpdate` socket event to the channel: `{
 
 ## What it does not do yet
 
-- No panel or verdict buttons in the web or phone app.
-- A self-reported commit is not checked against the repository.
-- Model agents don't have `receipt_list`.
+- A self-reported commit is not checked against the repository. That needs a request from the server to the agent host (a new workspace command that confirms a commit exists on the session's branch), a way to queue a host command that is not a person's click, and a reply the receipt can show. A terminal agent, the `no_run` case it was meant for, has no host worktree to ask. See U5 in [planning/receipts-ledger-wbs.md](planning/receipts-ledger-wbs.md).
+- No link to the pull request: the receipt does not carry one. The run's branch and commit are shown.
+- No past-decision lookup or crystallization (U7).
 
 The plan and its design decisions: [planning/receipts-ledger-wbs.md](planning/receipts-ledger-wbs.md).

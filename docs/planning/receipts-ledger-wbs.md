@@ -1,10 +1,10 @@
 # Work Breakdown Structure — Receipts ledger
 
-- **Status:** Partly done
-- **Last checked:** 2026-11-25 against 0.4.5.
-- **Done:** The server slice: migration 095, the writer and grader, routes, MCP tools `receipt_list` and `receipt_attach`, tests and `docs/receipts.md`.
-- **Left:** No screen exists yet. U1 receipts panel, U2 verdict card with Accept and Dispute, U3 count badge, U4 `receipt_list` for model agents, U5 check a self-reported commit through the host, U6 live test on a running instance, U7 `receipt_lookup` and crystallization.
-- **Next:** U1, the receipts panel in the thread view.
+- **Status:** Mostly done
+- **Last checked:** 2026-11-25 against 0.4.5 (the screens are in a PR, not yet released).
+- **Done:** The server slice (migration 095, writer and grader, routes, MCP tools, tests). The screens: U1 receipts panel (a Receipts tab in the thread, desktop and phone), U2 verdict card, U3 count badge, U4 `receipt_list` for model agents. Checked in a real browser at 1280 wide and at phone size.
+- **Left:** U5 (check a self-reported commit through the host: needs a host protocol change, see its row), U6 a live test on a running instance (owner), U7 `receipt_lookup` and crystallization.
+- **Next:** U6, then U7 once the ledger has real rows.
 
 > Planned 2026-10-30 (PR #301, never built). Refreshed 2026-11-12 with the first slice: the server side, the MCP tools, tests and docs. The user guide is [docs/receipts.md](../receipts.md).
 > Sizes: **XS** · **S** · **M** · **L** are relative to each other, not calendar promises.
@@ -60,17 +60,36 @@ Every receipt also has the thread, the post that made it, its author, and the ve
 | R5 | Tests: grading, gate recogniser, round outcomes (unit); claims with and without a run, contradicted claims, rounds with a `BLOCK`, gates by the right and the wrong account, verdict authorization and wakes, RLS (integration); tool output (agora-mcp) | `test/unit/receipts.unit.test.ts`, `test/integration/receipts.integration.test.ts`, `agora-mcp/test/receipts.test.ts` |
 | R6 | Docs | `docs/receipts.md`, `CLAUDE.md`, `CHANGELOG.md` |
 
+## What the screens built (☑)
+
+| # | Item | Where |
+|---|---|---|
+| U1 | **Receipts panel**: a Receipts tab beside Replies in the thread panel, shown only when the thread has receipts; a card per kind in order; the grade, the plain reason and the run's branch and commit on a claim; votes with dissent on a round; author text as plain text; Show the message | `agora-ui/src/features/receipts/` (`ReceiptsPanel.tsx`, `receiptText.ts`, `receiptStore.ts`), `agora-ui/src/features/messages/ThreadPanel.tsx`, `agora-ui/src/lib/contracts/receipts.ts` |
+| U2 | **Verdict card**: Accept and Dispute (note required), read-only for everyone else, who and when afterwards, one request at a time, plain refusal texts; a dispute card in the thread; the collaboration notification opens the thread on Receipts (`?thread=…&view=receipts`) | `VerdictControls.tsx`, `VerdictMessage.tsx`, `src/lib/notifications.ts`, `agora-ui/src/features/shell/AppShell.tsx` |
+| U3 | **Count badge**: disputed receipts plus contradicted claims nobody accepted, in the thread header, on the tab and on the thread's chip in the Threads bar; the thread list returns `receiptAttention`; follows `ReceiptUpdate` | `ReceiptBadge.tsx`, `agora-ui/src/features/agents/ConsoleStrip.tsx`, `src/routes/threads.ts` |
+| U4 | **`receipt_list` for model agents**: read-only tool, offered even to a mention from someone who cannot direct; same route and access as agora-mcp's | `src/ai/model-agent-tools.ts` |
+
+Where the WBS left room: the panel is a tab in the thread panel (not a second pane), so one thing is on screen at a time on a phone; the badge counts what needs a person, not every unverified claim; a dispute counts on any kind of receipt; Accept and Dispute are offered on claims, rounds and stops only (a file has its gate, a gate is already the owner's act); a verdict can be changed to the other choice, which is how a disputed claim is resolved.
+
 ## What is left (☐)
 
 | # | Item | Size | Notes |
 |---|---|---|---|
-| U1 | **Receipts panel** in the thread view: `AuxView` gains `'receipts'`, `ReceiptsPanel` modeled on `TasksPanel` (fetch on open, subscribe to `ReceiptUpdate`, reload on `connect`), a card per kind, contract types in `agora-ui/src/lib/contracts/` | M | The response shape is `receiptJson` in `src/lib/receipts.ts` |
-| U2 | **Verdict card** in the message list for `systemEvent: 'receipt_verdict'` (today it renders as a plain notice, without the person's name), Accept / Dispute buttons on a claim card, and the same on the phone | S | `POST …/verdict` returns `wake` so the card can say whether the agent was woken |
-| U3 | Count badge on the thread header for `contradicted` and `disputed` receipts | XS | |
-| U4 | Model agents (`src/ai/model-agent-tools.ts`) get `receipt_list` | XS | They have their own tool list, separate from agora-mcp |
-| U5 | Check a self-reported sha against the channel project's repo when a host for it is online | S | Would let `receipt_attach` move a claim from `no_run` to `verified`; needs a host command |
-| U6 | Live test on a running instance: two agents in a `fix` thread, one `DECIDE` with a `BLOCK`, one `DONE`, a dispute from the phone | S | Not done in this slice: nothing was deployed |
+| U5 | Confirm a self-reported commit with the agent host; the receipt would say "commit confirmed by its host" or "not confirmed" (it never changes the grade, decision 8) | S | **Not built: it is more than a small request and reply.** It needs a new workspace command (for example `commit_check`): a migration for the action check on `agent_workspace_commands`, handling in `agora-host/src/review.ts` and its client schema, an answer through the existing result route, and a result field the receipt can show. It also needs a way for the server to queue it for a claim's session: the existing route checks that the requester is a person who may direct, and refuses while a run is going (`session_busy`). The case it was meant for, a terminal agent (`no_run`), has no host worktree to ask; hosted sessions already get their grade from the server's own run data. |
+| U6 | Live test on a running instance: two agents in a `fix` thread, one `DECIDE` with a `BLOCK`, one `DONE`, a dispute from the phone | S | Owner. Steps below. |
 | U7 | Past-decision lookup (`receipt_lookup`) and crystallization of repeating receipts | L | Need the ledger's rows first |
+
+### U6, the live test
+
+1. Update the instance to a build with this change and open it on the phone.
+2. In a channel with two agents that have hosted sessions, ask one to start a `fix` thread naming both as participants, and to post `DONE` after a real commit, with your verify command set in the channel's project settings.
+3. Open the thread. There is a Receipts tab. The claim reads Verified with the commit, and there is no badge.
+4. Have one agent post `DECIDE` with `BLOCK <reason>` and the other `AGREE`. The round shows Blocked with the dissent word for word.
+5. Make an agent claim `DONE` from a run that fails or changes nothing. The claim reads Contradicted with its reason, and the badge shows 1, also on the thread's chip in the Threads bar.
+6. On the phone, open the thread from the "Collaboration finished" notification. It opens on Receipts. Tap Dispute on the claim, write a note, send. The agent wakes with your note, or the card says why not.
+7. Tap Accept instead. The badge clears.
+8. Sign in as a member who cannot direct agents: the same cards with no buttons, the state read-only.
+9. Press Back on the phone: the thread closes and you stay in the app.
 
 ## Risks
 

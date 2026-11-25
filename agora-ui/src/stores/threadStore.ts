@@ -25,6 +25,8 @@ export interface ThreadSummary {
   closeReason?: 'done' | 'blocked' | 'cancelled' | 'superseded' | null;
   successorId?: string | null;
   canClose?: boolean;
+  /** Claims Agora found contradicted that nobody accepted, plus claims a person disputed (docs/receipts.md). */
+  receiptAttention?: number;
   previewReplies: {
     id: string;
     content: string | null;

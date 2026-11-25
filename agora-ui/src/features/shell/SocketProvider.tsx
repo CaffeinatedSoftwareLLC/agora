@@ -32,6 +32,8 @@ import { useVoiceStore } from '../voice/voiceStore';
 import { useNotificationStore } from '../../stores/notificationStore';
 import type { AppNotification, NotificationReadPayload } from '../../lib/contracts/notifications';
 import { registerNativePush } from '../notifications/nativePush';
+import { useReceiptStore } from '../receipts/receiptStore';
+import type { ReceiptUpdatePayload } from '../../lib/contracts/receipts';
 
 /** A new message is on screen: in the open channel, or (a thread reply) in the open thread. */
 function isOnScreen(channelId: string, threadId?: string): boolean {
@@ -52,6 +54,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     if (!sessionUserId) return;
 
     const s = createSocket();
+    // A new sign-in starts with no receipts of the last one
+    useReceiptStore.getState().reset();
 
     s.on('connect', () => {
       useFileMetadataStore.getState().clear();
@@ -61,6 +65,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       void useUIStore.getState().loadPreferences();
       // The badge counts what arrived while disconnected
       void useNotificationStore.getState().load().catch(() => {});
+      // Receipts may have changed while disconnected
+      useReceiptStore.getState().reloadLoaded();
     });
 
     s.on('disconnect', () => {
@@ -152,6 +158,11 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     s.on('ThreadMetadataUpdate', (data: ThreadMetadataUpdatePayload) => {
       useMessageStore.getState().updateThreadMetadata(data.channelId, data.messageId, data.replyCount, data.lastReplyAt, data.threadClosedAt);
       useThreadStore.getState().updateParentMetadata(data);
+    });
+
+    // A receipt was written or changed (docs/receipts.md): the panel, the verdict card and the badge follow
+    s.on('ReceiptUpdate', (data: ReceiptUpdatePayload) => {
+      useReceiptStore.getState().applyUpdate(data);
     });
 
     s.on('ChannelBotConfig', (data: ChannelBotConfigPayload) => {

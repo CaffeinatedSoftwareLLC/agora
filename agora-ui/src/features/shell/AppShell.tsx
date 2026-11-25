@@ -49,12 +49,14 @@ export function AppShell() {
 
   // A notification link, /app/{channelId}?thread={threadId}: open that thread, then drop
   // the parameter so Back and a reload don't open it again
+  // (`&view=receipts` opens it on the thread's receipts)
   const urlThreadId = search.get('thread');
+  const urlThreadView = search.get('view') === 'receipts' ? 'receipts' : 'replies';
   useEffect(() => {
     if (!urlChannelId || !urlThreadId) return;
-    if (/^[0-9A-Z]{26}$/.test(urlThreadId)) useUIStore.getState().openThreadView(urlChannelId, urlThreadId);
-    setSearch(prev => { const next = new URLSearchParams(prev); next.delete('thread'); return next; }, { replace: true });
-  }, [urlChannelId, urlThreadId, setSearch]);
+    if (/^[0-9A-Z]{26}$/.test(urlThreadId)) useUIStore.getState().openThreadView(urlChannelId, urlThreadId, urlThreadView);
+    setSearch(prev => { const next = new URLSearchParams(prev); next.delete('thread'); next.delete('view'); return next; }, { replace: true });
+  }, [urlChannelId, urlThreadId, urlThreadView, setSearch]);
 
   // Auto-navigate to first text channel when at /app with no channel
   useEffect(() => {

@@ -6,7 +6,7 @@ Last checked: 2026-11-25 against 0.4.5. Each plan below starts with a status blo
 
 In the order the plans themselves say matters:
 
-1. **Decision ledger screens** ([receipts-ledger-wbs.md](receipts-ledger-wbs.md)). The server side is built. U1 to U7 (receipts panel, verdict card, badge, model-agent tool, host check, live test, lookup) are not.
+1. **Decision ledger** ([receipts-ledger-wbs.md](receipts-ledger-wbs.md)). The server side and the screens (receipts panel, verdict card, badge, model-agent tool) are built. Left: U5 (host check of a self-reported commit, needs a host protocol change), U6 (live test, owner), U7 (lookup and crystallization).
 2. **Live terminals, next steps** ([live-terminals.md](live-terminals.md)). Run the manual test on a real Claude Code box, then the Terminals view, then other agent kinds.
 3. **Store submission** ([app-store-readiness.md](app-store-readiness.md), [mobile-apps.md](mobile-apps.md) phase 5). Mostly owner steps: create the apps, publish the privacy and delete-account pages, a demo instance, the store forms, an iPhone test, a real-phone push check.
 4. **Post-beta roadmap** ([post-beta-roadmap.md](post-beta-roadmap.md)). Not started. First milestone: scoped automation with grants and one recurring read-only briefing. Project memory (issue 231) follows.
@@ -28,7 +28,7 @@ Never verified on a real machine: macOS backup, start at boot and removal; comma
 | [ui-redesign.md](ui-redesign.md) | Mobile console and design tokens. | Done | Text contrast in three components |
 | [jev-wbs.md](jev-wbs.md) | Decision model (Jev): routing, search screening, file tags, file search. | Partly done | Backlog: A.4, run gate, webhook decider, image tagging |
 | [decision-models-clef-metis.md](decision-models-clef-metis.md) | Research and build notes for the Cloudflare and GreenPT decision models. | Partly done | Self-hosted adapter, AI Gateway, exact token count |
-| [receipts-ledger-wbs.md](receipts-ledger-wbs.md) | Decision ledger (receipts). | Partly done | U1 to U7, the screens |
+| [receipts-ledger-wbs.md](receipts-ledger-wbs.md) | Decision ledger (receipts). | Mostly done | U5 to U7 |
 | [live-terminals.md](live-terminals.md) | A boxed agent's own CLI in a terminal Agora owns. | Partly done | Real-box test, Terminals view, layouts, other agents |
 | [box-terminal.md](box-terminal.md) | Design and threat list for the owner's shell in a box. | Partly done | Reattach, passkey step-up, quotas |
 | [mobile-apps.md](mobile-apps.md) | Android and iOS app plan, push relay contract (section 8). | Partly done | Phase 5, store requirements |

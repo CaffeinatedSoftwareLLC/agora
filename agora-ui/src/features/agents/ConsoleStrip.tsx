@@ -1,3 +1,4 @@
+import { ThreadReceiptBadge } from '../receipts/ReceiptBadge';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSocket } from '../../hooks/useSocket';
 import type { AgentSessionUpdatePayload } from '../../lib/contracts/ws-events';
@@ -289,6 +290,7 @@ export function ConsoleStrip({ channelId, onOpenThread }: ConsoleStripProps) {
               {protocol?.yieldTo && <span className="text-xs text-text-muted">→ {protocol.yieldTo}</span>}
               <span className="max-w-[10rem] truncate">{snippet}</span>
               <span className="font-mono text-xs text-text-muted">{thread.replyCount}</span>
+              <ThreadReceiptBadge threadId={thread.id} fromList={thread.receiptAttention} />
             </span>
           </button>
         );
