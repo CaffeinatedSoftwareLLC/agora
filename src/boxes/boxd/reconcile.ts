@@ -107,6 +107,8 @@ export class Reconciler {
         return t;
     }
 
+    private watching = false;
+
     /** Stop after the box being worked on (SIGTERM; install/backup.sh waits for this). */
     stop() { this.stopping = true; }
 
@@ -379,6 +381,27 @@ export class Reconciler {
      * so this re-attaches it; the pinned address keeps the box's /etc/hosts right (§9.3).
      * Anything else on the network is disconnected.
      */
+    /**
+     * Between passes: put a recreated edge back on every box network within seconds, instead of
+     * waiting for the next full pass (§9.3). Touches nothing but the edge's own attachment, and
+     * does nothing when the edge is where it should be (one network inspect per box).
+     */
+    async watchEdge(): Promise<void> {
+        if (this.stopping || this.watching) return;
+        this.watching = true;
+        try {
+            for (const box of await this.d.store.listBoxes()) {
+                if (this.stopping) return;
+                if (box.desiredState === 'deleted' || !box.subnet) continue;
+                await this.reattachEdge(box).catch(err => this.d.log.warn(`box ${box.id}: edge re-attach failed: ${errText(err)}`));
+            }
+        } catch (err) {
+            this.d.log.warn(`edge watch failed: ${errText(err)}`);
+        } finally {
+            this.watching = false;
+        }
+    }
+
     /** Put the edge back on an existing, matching box network; creates nothing else. */
     private async reattachEdge(box: BoxRow) {
         if (!box.subnet) return;

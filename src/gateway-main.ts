@@ -12,6 +12,8 @@ import { storage } from './lib/storage';
 
 async function main() {
     const db = new Pool({ connectionString: config.dbUrl, max: 10 });
+    // An idle connection that Postgres ends (restart, failover) must not take this process down: the pool opens another
+    db.on('error', err => console.warn('An idle database connection failed:', err instanceof Error ? err.message : String(err)));
     const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
     // The gateway encrypts files the API later decrypts: both must hold the same key
     await verifyEncryptionKeyAtStartup(db, config.encryptionKey);

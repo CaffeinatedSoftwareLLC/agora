@@ -28,6 +28,8 @@ async function main() {
     }
 
     const db = new Pool({ connectionString: config.dbUrl, max: 5 });
+    // An idle connection that Postgres ends (restart, failover) must not take this process down: the pool opens another
+    db.on('error', err => console.warn('An idle database connection failed:', err instanceof Error ? err.message : String(err)));
     // This install's leftover run containers, by name from its own database (#126)
     const candidates = (await runContainerCandidates(db)).map(id => containerName(id, instance));
     const { removed: orphans, failed } = await sandbox.removeRunContainers(candidates);

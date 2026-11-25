@@ -4,6 +4,10 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
+### Fixed
+
+- **After the box edge was recreated (a deploy, an upgrade), boxes could stay cut off from Agora for up to about 15 seconds, and a database connection ended under an idle pool could stop boxd, the edge, the gateway or the runner.** boxd re-attached the edge to the box networks only in its full 15-second pass, which a slow pass (boxes being created) delayed further; it now checks the edge's attachment every 3 seconds, so boxes are back within about 4 seconds (7.5 to 14.3 s before, measured with a forced recreate). The four processes now log an idle database connection error as one line instead of exiting on it with a dump of the connection object.
+
 ## 0.4.5 — 2026-11-24
 
 Installs and upgrades work again, and the two terminals open on a real install. **The build no longer fails:** installs and upgrades stopped at "Building the new images" with a Devin download error, because the pinned Devin CLI was removed by its vendor. Devin is now 3000.14, and a CLI whose pinned download is unavailable is left out of the box image with a warning; a download with the wrong checksum still stops the build. **The terminals open:** since 0.4.2 the box terminal, and in 0.4.4 the live terminal, answered "Open the terminal from this site's own pages" on any install behind Caddy or Tailscale. **The live terminal link stays** in the agent's sheet while it waits on you, and **the mode switch says why** when it is refused and now sits under How it runs. **Upgrade note:** agent boxes are rebuilt on upgrade (box image 9); home folders and logins are kept.

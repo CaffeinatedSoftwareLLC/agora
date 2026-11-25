@@ -120,10 +120,20 @@ describe('box recovery', () => {
         const started = await startedAt();
         const t = await now();
         expect((await compose('up', '-d', '--no-deps', '--force-recreate', 'box-edge')).code).toBe(0);
+        // boxd puts the edge back on the box's network within seconds (docs/agent-boxes.md §9.3), and the
+        // edge needs a moment to start: poll with a short curl until it answers, and say what it saw. The
+        // host's last check-in is no proof: it can be from the old edge, before it was replaced.
+        const began = Date.now();
+        let seen = 'no answer';
+        await until('the box to reach Agora through the recreated edge (boxd re-attaches it within seconds)', async () => {
+            const r = await inBox(box.container, 'curl -s -m 3 -o /dev/null -w "%{http_code}" http://edge:8080/health', 15_000);
+            seen = r.stdout || `no answer (curl exit ${r.code})`;
+            return r.stdout === '200';
+        }, 90_000, 1000).catch(err => { throw new Error(`${err.message}; last curl: ${seen}`); });
+        // Bounded: the recovery is one edge-watch tick plus the edge's own start, not a full boxd pass behind a slow one
+        expect(Date.now() - began, 'seconds until the box reached Agora again').toBeLessThan(45_000);
         await hostCheckedInSince(t);
         expect(await startedAt()).toBe(started);
-        const r = await inBox(box.container, 'curl -s -o /dev/null -w "%{http_code}" http://edge:8080/health');
-        expect(r.stdout).toBe('200');
     }, 300_000);
 
     it('a boxd restart leaves boxes running and picks up actions asked for meanwhile', async () => {

@@ -18,6 +18,8 @@ async function main() {
     if (!/^[0-9a-f]{64}$/i.test(secret)) throw new Error('AGORA_EDGE_SECRET must be 64 hex characters');
     const instance = instanceName();
     const db = new Pool({ connectionString: config.dbUrl, max: 20 });
+    // An idle connection that Postgres ends (restart, failover) must not take the edge down: the pool opens another
+    db.on('error', err => console.warn(JSON.stringify({ level: 'warn', msg: 'An idle database connection failed', error: err instanceof Error ? err.message : String(err) })));
     const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
     // The edge decrypts the owner's GitHub token: it must hold the instance's key. After a reboot
     // Docker starts the edge beside Postgres (depends_on doesn't apply), so wait for it here
