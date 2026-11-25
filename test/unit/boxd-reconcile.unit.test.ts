@@ -75,6 +75,19 @@ describe('boxd reconcile', () => {
         expect(t.store.minted).toHaveLength(1);
     });
 
+    it('watchEdge puts a recreated edge back between passes, and does nothing when it is attached', async () => {
+        const box = t.store.add();
+        await t.r.pass();
+        const n = names(box.id);
+        const calls = t.docker.calls.length;
+        await t.r.watchEdge();
+        expect(t.docker.calls.slice(calls).filter(c => /connect|create|remove|start|stop/i.test(c))).toEqual([]);
+        await t.docker.disconnectNetwork(n.n, EDGE);
+        await t.r.watchEdge();
+        expect(Object.values(t.docker.networks.get(n.n)!.Containers)).toContainEqual({ Name: EDGE, IPv4Address: '10.213.0.2/28' });
+        expect(t.store.minted).toHaveLength(1);
+    });
+
     it('re-attaches the edge to a box that is backing off or failed, without waiting out the backoff', async () => {
         const box = t.store.add();
         await t.r.pass();

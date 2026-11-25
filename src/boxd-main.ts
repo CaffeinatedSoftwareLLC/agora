@@ -18,6 +18,8 @@ import { BOX_IMAGE_VERSION } from './boxes/boxd/version';
 import { retryWhileUnavailable } from './lib/startup-retry';
 
 export const PASS_INTERVAL_MS = 15_000;
+/** How often a recreated edge is put back on the box networks, between full passes (§9.3). */
+export const EDGE_WATCH_MS = 3_000;
 export const HEARTBEAT_KEY = 'agora:boxd:heartbeat';
 /** One boxd per instance database: a second one waits for this lock. */
 const LOCK_KEY = 'agora-boxd';
@@ -79,6 +81,8 @@ async function main() {
     }
 
     const db = new Pool({ connectionString: config.dbUrl, max: 4 });
+    // An idle connection that Postgres ends (restart, failover) must not take boxd down
+    db.on('error', err => console.warn('[boxd] an idle database connection failed:', err instanceof Error ? err.message : String(err)));
     const lock = await retryWhileUnavailable('boxd', () => holdLock(db));
     const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
     const store = new DbBoxStore(db, config.encryptionKey, events => publishEvents(redis, events));
@@ -106,11 +110,13 @@ async function main() {
         if (!stopping) timer = setTimeout(() => { current = loop(); }, PASS_INTERVAL_MS);
     };
     current = loop();
+    const watcher = setInterval(() => { void reconciler.watchEdge(); }, EDGE_WATCH_MS);
 
     const shutdown = async () => {
         if (stopping) return;
         stopping = true;
         clearTimeout(timer);
+        clearInterval(watcher);
         reconciler.stop();
         console.log('[boxd] stopping after the current operation');
         await current;

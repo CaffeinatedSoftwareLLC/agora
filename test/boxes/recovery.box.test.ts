@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-    api, boxAction, compose, createBox, docker, inBox, inspectBox, instance, OPERATOR, psql, sh, shEnv, until, waitRunning,
+    api, boxAction, compose, createBox, docker, inBox, inspectBox, instance, INSTANCE, OPERATOR, psql, sh, shEnv, until, waitRunning,
     type Box, type Instance,
 } from './harness';
 
@@ -119,11 +119,48 @@ describe('box recovery', () => {
     it('a recreated edge is re-attached and the box reaches Agora again without restarting', async () => {
         const started = await startedAt();
         const t = await now();
+        // The edge's address on the box's network, to see whether a recreated edge keeps its MAC
+        const edgeEndpoint = async () => (await docker('network', 'inspect', '-f', '{{range .Containers}}{{.Name}} {{.MacAddress}} {{.IPv4Address}};{{end}}', `${INSTANCE}_box_${box.id.toLowerCase()}`)).stdout.trim();
+        const endpointBefore = await edgeEndpoint();
         expect((await compose('up', '-d', '--no-deps', '--force-recreate', 'box-edge')).code).toBe(0);
+        const probes: string[] = [];
+        // boxd puts the edge back on the box's network within seconds (docs/agent-boxes.md §9.3), and the
+        // edge needs a moment to start: poll with a short curl until it answers, and say what it saw. The
+        // host's last check-in is no proof: it can be from the old edge, before it was replaced.
+        const began = Date.now();
+        let seen = 'no answer';
+        await until('the box to reach Agora through the recreated edge (boxd re-attaches it within seconds)', async () => {
+            const r = await inBox(box.container, 'curl -sS -m 3 -o /dev/null -w "%{http_code}" http://edge:8080/health 2>&1', 15_000);
+            seen = r.stdout || `no answer (curl exit ${r.code})`;
+            probes.push(`+${Math.round((Date.now() - began) / 1000)}s ${r.code} ${seen.replace(/\s+/g, ' ')}`);
+            return r.stdout === '200';
+        }, 120_000, 1000).catch(err => { throw new Error(`${err.message}; last curl: ${seen}`); });
+        // Bounded: one edge-watch tick plus the edge's start. Before the edge's MAC was pinned, a gVisor box kept sending to the old
+        // MAC and took 40 to 50 s (CI, both architectures); with it, the same CI runs answer within a few seconds
+        const took = Date.now() - began;
+        console.log(`[recovery] the box reached Agora again ${Math.round(took / 1000)} s after the edge was recreated`);
+        // The timeline, for the next person who finds this slow: when boxd attached the edge, when the edge listened, what the box's neighbour table says
+        const stamp = (r: { stdout: string; stderr: string }, re: RegExp) => (r.stdout + r.stderr).split(/\r?\n/).filter(l => re.test(l)).slice(-3).join(' | ');
+        // The edge keeps its MAC as well as its address across a recreate: a box's neighbour cache stays right
+        const edgeOnly = (list: string) => list.split(';').filter(e => e.includes('box-edge')).join(';');
+        const endpointAfter = await edgeEndpoint();
+        const engine = (await docker('version', '-f', '{{.Server.Version}} api {{.Server.APIVersion}} {{.Server.Os}}/{{.Server.Arch}}')).stdout.trim();
+        const timeline = [
+            `engine: ${engine}`,
+            `compose returned ${new Date(began).toISOString()}`,
+            `edge: ${stamp(await compose('logs', '--no-color', '-t', '--tail', '20', 'box-edge'), /listening/)}`,
+            `boxd: ${stamp(await compose('logs', '--no-color', '-t', '--tail', '60', 'boxd'), new RegExp(`${box.id}.*edge attached`))}`,
+            `edge endpoint before: ${endpointBefore}`,
+            `edge endpoint after: ${endpointAfter}`,
+            `probes: ${probes.join(' | ')}`,
+            `box neighbours: ${(await inBox(box.container, 'cat /proc/net/arp 2>&1 | tr "[:space:]" " "')).stdout}`,
+        ];
+        console.log(['[recovery] timeline', ...timeline].join(String.fromCharCode(10)));
+        // Engine 29 keeps the pinned MAC across a recreate; 28.0 ignores the pin and the edge's announcement does the work instead
+        if (Number(engine.split('.')[0]) >= 29) expect(edgeOnly(endpointAfter), 'the edge endpoint (name, MAC, address) on the box network').toBe(edgeOnly(endpointBefore));
+        expect(took, 'ms until the box reached Agora again').toBeLessThan(20_000);
         await hostCheckedInSince(t);
         expect(await startedAt()).toBe(started);
-        const r = await inBox(box.container, 'curl -s -o /dev/null -w "%{http_code}" http://edge:8080/health');
-        expect(r.stdout).toBe('200');
     }, 300_000);
 
     it('a boxd restart leaves boxes running and picks up actions asked for meanwhile', async () => {
