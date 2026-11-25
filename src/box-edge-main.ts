@@ -11,6 +11,7 @@ import { EDGE_AGORA_PORT, EDGE_PROXY_PORT, instanceName } from './lib/boxes/cont
 import { verifyEncryptionKeyAtStartup } from './lib/key-fingerprint';
 import { retryWhileUnavailable } from './lib/startup-retry';
 import { createEdge } from './boxes/edge/server';
+import { announceBoxNetworks } from './boxes/edge/announce';
 import { GITHUB_API_BASE, GITHUB_BASE } from './boxes/edge/upstream';
 
 async function main() {
@@ -34,11 +35,14 @@ async function main() {
     });
     await edge.start({ agora: EDGE_AGORA_PORT, proxy: EDGE_PROXY_PORT });
     console.log(JSON.stringify({ level: 'info', msg: 'Box edge listening', instance, agora: EDGE_AGORA_PORT, proxy: EDGE_PROXY_PORT }));
+    // A box on a recreated edge's network must learn the edge's new hardware address (announce.ts)
+    const stopAnnouncing = announceBoxNetworks();
 
     let stopping = false;
     const shutdown = async () => {
         if (stopping) return;
         stopping = true;
+        stopAnnouncing();
         await edge.close(30_000);
         await db.end();
         redis.disconnect();
