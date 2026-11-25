@@ -144,8 +144,9 @@ describe('box recovery', () => {
         // The edge keeps its MAC as well as its address across a recreate: a box's neighbour cache stays right
         const edgeOnly = (list: string) => list.split(';').filter(e => e.includes('box-edge')).join(';');
         const endpointAfter = await edgeEndpoint();
-        expect(edgeOnly(endpointAfter), 'the edge endpoint (name, MAC, address) on the box network').toBe(edgeOnly(endpointBefore));
+        const engine = (await docker('version', '-f', '{{.Server.Version}} api {{.Server.APIVersion}} {{.Server.Os}}/{{.Server.Arch}}')).stdout.trim();
         const timeline = [
+            `engine: ${engine}`,
             `compose returned ${new Date(began).toISOString()}`,
             `edge: ${stamp(await compose('logs', '--no-color', '-t', '--tail', '20', 'box-edge'), /listening/)}`,
             `boxd: ${stamp(await compose('logs', '--no-color', '-t', '--tail', '60', 'boxd'), new RegExp(`${box.id}.*edge attached`))}`,
@@ -155,6 +156,7 @@ describe('box recovery', () => {
             `box neighbours: ${(await inBox(box.container, 'cat /proc/net/arp 2>&1 | tr "[:space:]" " "')).stdout}`,
         ];
         console.log(['[recovery] timeline', ...timeline].join(String.fromCharCode(10)));
+        expect(edgeOnly(endpointAfter), 'the edge endpoint (name, MAC, address) on the box network').toBe(edgeOnly(endpointBefore));
         expect(took, 'ms until the box reached Agora again').toBeLessThan(20_000);
         await hostCheckedInSince(t);
         expect(await startedAt()).toBe(started);
