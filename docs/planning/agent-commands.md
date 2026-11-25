@@ -1,5 +1,11 @@
 # Agent commands: what is actually possible
 
+- **Status:** Done
+- **Last checked:** 2026-11-25 against 0.4.5.
+- **Done:** Hosted sessions run `compact` (Claude, Codex), `context` (Claude), `clear` and `stop`. Shipped in 0.4.2; user guide is `docs/agent-commands.md`.
+- **Left:** Not run against real CLIs: box-mode and ChatGPT-plan launches, and Gemini, OpenCode, OMP and Devin. Not built: `model`, and any command for an agent connected from a terminal (not possible today).
+- **Next:** Run `@claude /compact` and `@codex /compact` once on a boxed agent and a ChatGPT-plan agent on a real instance.
+
 Findings from 2026-11-13, before anything was built. Tested with Claude Code 2.1.322 and codex-cli 0.166.0 on Windows, in a temporary folder with throwaway sessions (Haiku for Claude; the owner's real sessions and config were not touched). The Claude CLI was used as logged in on this machine; nothing was copied.
 
 The goal: `@claude /compact` in Agora reaches that agent's own session and runs there as the CLI's command, not as chat text.

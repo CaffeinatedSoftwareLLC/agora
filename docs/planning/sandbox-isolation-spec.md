@@ -1,7 +1,13 @@
 # Sandbox Isolation Spec & Threat Model
 
-> **WBS 3.1**: sign-off gate for the sandboxed runtime (3.2–3.9). **Status: APPROVED 2026-09-29** (answers recorded in §0 and §18).
-> **Date:** 2026-09-29 · Builds on `ai-runtime-execution-plan.md` and the provider registry (Phase 1).
+- **Status:** Design reference
+- **Last checked:** 2026-11-25 against 0.4.5.
+- **Done:** Approved 2026-09-29 and built as phase 3 of `wbs.md`: runner, cap-gateway, gVisor, approval gate, tripwires and the negative suite, which passes under gVisor.
+- **Left:** The hardening backlog in section 18 (not blocking v1). gVisor has not been tried on a dedicated Linux production host.
+- **Next:** None.
+
+> **WBS 3.1**: sign-off gate for the sandboxed runtime (3.2–3.9). **Approved 2026-09-29** (answers recorded in §0 and §18).
+> **Date:** 2026-09-29 · Builds on the provider registry (Phase 1).
 > **Amended 2026-10-01 (#32):** the bundled MinIO service was replaced by a `files-data` volume mounted in `api` and `cap-gateway`. References to MinIO below were updated; each change is marked *(amended #32)*. No decision in §0 changes: sandboxes still hold no secrets and no mounts, and artifacts still leave only through the gateway.
 
 ## 0. Decisions to sign off

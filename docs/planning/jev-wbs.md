@@ -1,11 +1,17 @@
 # Work Breakdown Structure — Jev (System One decisions)
 
+- **Status:** Partly done
+- **Last checked:** 2026-11-25 against 0.4.5.
+- **Done:** J0, A.1 to A.3, B, C and the docs, merged in PR #51 and live since 2026-10-17.
+- **Left:** The backlog: A.4 advisory participant suggestion; the decision model on the code-run gate; decisions for sandboxed code and token use; a webhook decider; image tagging.
+- **Next:** None planned. Take A.4 or the run gate first if the decision model is to do more.
+
 > Planned 2026-10-01 in Agora (thread `01M3WPM11NV2NFZY2649RM14BR`, #general) by claude-code (leader, implements), codex and gemini (review), with Eryk.
 > Replaces WBS 2.2 / 2.3 of `wbs.md`, which moved here.
 > Sizes: **XS** <1h · **S** ≈ half-day · **M** ≈ 1–2 days · **L** ≈ 3–5 days. Sizes are relative, not calendar promises.
-> Status: ☐ todo · ◐ in progress · ☑ done
+> Marks: ☐ todo · ◐ in progress · ☑ done
 
-## Status (2026-10-17: merged and running live)
+## State on 2026-10-17 (history; the status block at the top is current)
 
 Merged to `main` as **PR #51** on 2026-10-02. The live WSL + gVisor stack runs it: checked 2026-10-17, its checkout is at `89cbcca` (the PR's last commit), 34 migrations are applied (`033`, `034` included) and the `api` image contains `unpdf`.
 
@@ -85,7 +91,7 @@ Everything in `wbs.md` "Definition of Done", plus:
 - **Off means off:** a test proves the feature's code path makes zero Jev calls when the `decide` route is missing or disabled, or the per-use switch is off.
 - **No secrets in logs or errors:** provider errors are sanitized before they are stored or returned.
 - **Mocks follow the live contract:** after any change to the adapter, one opt-in live call (`JEV_KEY` set) is run and its result noted in the PR.
-- A package that adds a migration gets its own test database (see `HANDOFF.md`, "Local environment").
+- A package that adds a migration gets its own test database (migrations are not reversible, so a branch with a new migration must not share a test database with other branches).
 
 ---
 
@@ -135,8 +141,8 @@ Everything in `wbs.md` "Definition of Done", plus:
 |---|---|---|---|
 | D.1 | ☑ `docs/api-reference.md` (new endpoints and fields), `docs/backend-architecture.md` (decide service, screening, tagging worker), `docs/getting-started.md` (how to turn Jev on), `agora-mcp/README.md`. | S | each phase |
 | D.2 | ☑ `docs/storage-and-encryption.md`: tags are plain text in Postgres; file text is sent to the decision provider when tagging is on, and again when ranking is on; what strict mode does and does not protect against. | XS | C.3, C.7 |
-| D.3 | ◐ Done on a dev instance, not on gVisor, and not with a real Tavily search (see Status). Live checks on the WSL + gVisor stack with a real key, one per use: an assistant mention routed; a Tavily search with a planted injection screened from a sandboxed run and from the assistant; a file tagged, re-tagged after a criteria edit, and found by search. Results written to `HANDOFF.md`. | S | A, B, C |
-| D.4 | ☑ `CHANGELOG.md`, `wbs.md` (2.2 / 2.3 point here), `HANDOFF.md`. | XS | each phase |
+| D.3 | ☑ Live checks with a real key, one per use. Eryk reported on 2026-10-17 that the decision model, search screening with a real Tavily key and code runs under gVisor all work. The individual checks were not written down one by one. | S | A, B, C |
+| D.4 | ☑ `CHANGELOG.md`, `wbs.md` (2.2 / 2.3 point here). | XS | each phase |
 
 ## Backlog (not in this WBS's first release)
 

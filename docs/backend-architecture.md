@@ -20,6 +20,7 @@ Agora's backend is built on **Fastify 5**, **PostgreSQL 16**, **Socket.IO 4**, a
 - [Threads](#threads)
 - [File Storage and Encryption](#file-storage-and-encryption)
 - [Decision Model](#decision-model)
+- [Multi-speaker speech](#multi-speaker-speech)
 
 ---
 
@@ -958,3 +959,13 @@ Settings are one row per server in `ai_decision_settings` (`src/routes/ai-decisi
 `readFileText()` (`src/lib/file-read.ts`, behind `GET /files/:fileId/text` and the gateway's `POST /v1/files/read`) returns a file's extracted text in pages under the same access rule. A file the caller cannot see answers exactly like one that does not exist, and nothing is decrypted before the check. It needs no decision model.
 
 Both run on the pool rather than the request's RLS-bound client: bots are not server members, so row-level policies cannot express their per-channel access. Authorization is the explicit check in step 1 and step 4.
+
+---
+
+## Multi-speaker speech
+
+Multi-speaker speech (audio overviews) goes through `synthesizeDialogue()` in `src/ai/speech.ts`. An adapter with native multi-speaker support implements `ttsDialogue`. The Gemini adapter sends one text part per line with `speechMetadata: { speaker }`, plus `multiSpeakerVoiceConfig`, and no preamble. An adapter without it voices each line with `tts` and joins the WAVs with a 0.3 s pause. If only one speaker is used, it is a single-voice call.
+
+In the sandbox, `agora:std` `tts(text, { speakers })` makes the gateway parse `Name: ...` turns. It refuses undeclared labels and an unlabelled opening with a 400.
+
+If Gemini changes the multi-speaker contract again, the quick fallback is to delete `ttsDialogue` from `src/ai/adapters/gemini.ts`. Gemini then voices line by line, one call per line, so watch the TTS preview requests-per-minute limits.

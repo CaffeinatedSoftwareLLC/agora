@@ -1,6 +1,6 @@
 # Using subscriptions (not API keys) with Agora
 
-> Deep dive 2026-10-19 at Eryk's request: four parallel researchers (Anthropic, OpenAI, Google, competitors). Sources fetched 2026-10-19; press dates are secondary. Not legal advice. Builds on `harness-research.md` §1 and supersedes its guardrail 4 for OpenAI.
+> Deep dive 2026-10-19 at Eryk's request: four parallel researchers (Anthropic, OpenAI, Google, competitors). Sources fetched 2026-10-19; press dates are secondary. Not legal advice.
 
 ## The rule every provider enforces
 Providers leave you alone when **their own official client makes the model calls**, run by the account holder for themselves. They block you when you **take the login token and use it elsewhere**, **spoof the official client**, or **serve other people from one person's plan**. Evidence: OpenCode/Cline/Roo lost Claude OAuth for spoofing Claude Code headers (Jan 2026) and OpenCode removed Anthropic support "per legal requests" (2026); Google suspended OpenClaw users on Antigravity OAuth (Feb 11–27 2026); Anthropic moved all "third-party harnesses" off subscription limits (2026-04-04). Nothing found against MCP servers running inside the user's own session (MCP Agent Mail, Concord, Parley) or wrappers that spawn the unmodified CLI under the user's login (claudecodeui, opcode, Happy, Vibe Kanban).

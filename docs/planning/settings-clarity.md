@@ -1,5 +1,11 @@
 # Settings clarity: one home for agents
 
+- **Status:** Done
+- **Last checked:** 2026-11-25 against 0.4.5.
+- **Done:** Agents and Models and assistant pages, the Add an agent flow and the redirects from the old pages. Shipped in 0.4.2.
+- **Left:** Delete the unrouted old Agents page (parts of `AgentSessionsSettings.tsx` are still used by the new pages); the optional bolder option; a small endpoint so non-admins see each account's kind.
+- **Next:** Delete the unrouted page.
+
 The problem, in the owner's words: "Settings are confusing to be honest, we have bots, agents, and AI, we need a way to make that clearer."
 
 ## The concepts, one sentence each

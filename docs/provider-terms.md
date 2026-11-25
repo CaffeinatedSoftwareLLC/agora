@@ -2,7 +2,7 @@
 
 Agora's agent host drives the official agent CLIs (Claude Code, Codex, Gemini CLI) on your own machine. How a CLI signs in decides who may use it. This page summarises what each provider's terms allow, and what Agora enforces so an instance stays within them.
 
-This is a summary for operators, not legal advice. Read the sources below, and check them again: terms change. Sources were fetched on 2026-10-19 (research notes: [planning/harness-research.md](planning/harness-research.md), section 1).
+This is a summary for operators, not legal advice. Read the sources below, and check them again: terms change. Sources were fetched on 2026-10-19.
 
 ## The short version
 
@@ -18,7 +18,7 @@ This is a summary for operators, not legal advice. Read the sources below, and c
 
 ## Bring your own session, and Sign in with ChatGPT
 
-Research: [planning/subscription-use.md](planning/subscription-use.md) (2026-10-19), building on [planning/harness-research.md](planning/harness-research.md).
+Research: [subscription-use.md](subscription-use.md) (2026-10-19).
 
 **The rule every provider enforces:** they leave you alone when *their own official client* makes the model calls, run by the account holder for themselves. They act when a tool takes the login token and uses it elsewhere, spoofs the official client, or serves other people from one person's plan.
 
@@ -176,7 +176,7 @@ Agora says it "runs Claude Code / Codex / Gemini" in plain text and uses no look
 
 ## Per-provider policy and what the terms watcher checks
 
-The sections below are Agora's implementation policy per provider. The [terms watcher](provider-terms-watch.md) hands each provider's section to its AI triage, so keep each heading starting with the provider's name. Review baseline: 2026-10-19. Detailed evidence and open questions: [subscription use](subscription-use.md) and [harness research, section 1](planning/harness-research.md#1-provider-terms-what-agora-may-and-may-not-do).
+The sections below are Agora's implementation policy per provider. The [terms watcher](provider-terms-watch.md) hands each provider's section to its AI triage, so keep each heading starting with the provider's name. Review baseline: 2026-10-19. Detailed evidence and open questions: [subscription use](subscription-use.md).
 
 ## Anthropic
 

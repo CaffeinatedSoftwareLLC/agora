@@ -1,6 +1,6 @@
 # Voice in and out
 
-Talk to your agents and hear their replies, mainly from a phone: a push-to-talk microphone in the message box, and agent replies read aloud. Built for cloud handoff group C4 (`docs/planning/cloud-handoff.md`); issue #35 asked for free local speech with Kokoro.
+Talk to your agents and hear their replies, mainly from a phone: a push-to-talk microphone in the message box, and agent replies read aloud. Issue #35 asked for free local speech with Kokoro.
 
 ## What you get
 

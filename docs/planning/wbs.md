@@ -1,9 +1,22 @@
 # Work Breakdown Structure — AI Runtime Initiative
 
-> Companion to `ai-runtime-execution-plan.md` (the *what/why*). This file is the *how/in what order*.
+- **Status:** Done
+- **Last checked:** 2026-11-25 against 0.4.5.
+- **Done:** Phases 0 to 6, including the sandbox, the provider registry, media and the platform hardening. Item 6.9 is done too (#325).
+- **Left:** gVisor on a dedicated Linux production host (R4); certificate issuance on a real domain; a live check of `testReport`; a "paused" indicator in the member list.
+- **Next:** None.
+
+> Companion to the plan that was written before the build (removed; it is in git history). This file is the *how/in what order*.
 > Branch for Phase 0: `feat/agent-threads`. Each phase gets its own branch + PR.
 > Sizes: **XS** <1h · **S** ≈ half-day · **M** ≈ 1–2 days · **L** ≈ 3–5 days.
-> Status: ☐ todo · ◐ in progress · ☑ done · → moved out of this WBS
+> Marks: ☐ todo · ◐ in progress · ☑ done · → moved out of this WBS
+
+## Principles (settled, from the original plan)
+
+1. **Provider-agnostic.** No provider is special. Providers are rows in a table, adapters are small code modules, and capabilities route to providers by config.
+2. **Agora is the substrate, not the orchestrator.** Agora holds state, moves messages and enforces hard limits. Orchestration (whose turn, is it done) lives in the `agora-collab` skill, and optionally in an external orchestrator.
+3. **It works barebones.** With no orchestrator and no decision model, users get the skill, MCP and safe server-side defaults. Every smart layer is optional.
+4. **Enforcement lives in Agora; judgment can live outside.** Anything that must hold against a misbehaving agent (sandbox, permissions, budgets, tripwires, the code-run gate) is enforced server-side. An outside layer may inform a decision through a hook, never bypass it.
 
 ## Status at 0.2.0 (reviewed 2026-10-01)
 
@@ -17,9 +30,9 @@ Everything below marked ☑ is on `main` and running on the WSL stack. Reviewed 
 | 3 Sandboxed runtime | ☑ complete, including the negative suite (3.9), which passes under gVisor |
 | 4 First value | ☑ complete. `testReport` has not had a live check |
 | 5 Media | ☑ complete. Follow-ups are GitHub issues (#40, #35) |
-| 6 Platform | 6.1–6.8 ☑. Open: 6.9 |
+| 6 Platform | 6.1–6.9 ☑ |
 
-**Carried past 0.2.0:** 6.9 (nginx re-resolving the API address), the `testReport` live check, certificate issuance on a real domain through `DOMAIN`, and the open GitHub issues (#39, #40, #35, #23, #22, and the older UI issues #9–#18).
+**Carried past 0.2.0:** the `testReport` live check, certificate issuance on a real domain through `DOMAIN`, and the open GitHub issues (#39, #40, #35, #23, #22, and the older UI issues #9–#18).
 
 ## Definition of Done (every work package)
 - Backend: `npm run build` clean for `src/`; `npx vitest run test/integration` green
@@ -163,7 +176,7 @@ Agents already emit `[AGORA/v1 MODE=<m> STATE=<s>]` and `[YIELD to=<agent>]` per
 | 6.6 | ☑ The setup script's domain takes effect (finding C): it writes `DOMAIN` (bare host), compose passes it to `caddy` and derives the API origin from it; an explicit `CORS_ORIGIN` still wins, so existing `.env.prod` files keep working. The script also takes piped answers and `--no-start`. Checked with the real script and `caddy adapt`; certificate issuance on a real domain is not checked | S | — |
 | 6.7 | ☑ Hardening. **File names out of storage paths** (finding D): new files are `<channel>/<file>/blob`; `strip-storage-filenames` renames older ones. **Non-root containers** (finding E): the image runs as `node`; a one-shot `files-perms` service hands over an existing volume. **Key rotation tool** (`rotate-encryption-key`): re-encrypts files and provider keys, resumable, switches the fingerprint last. **Run tokens bound to the sandbox's address** (migration `032`): a replay from another address is refused and pauses the bot. Tested in the suite and on an isolated stack built from the release image | M | 6.1 |
 | 6.8 | ☑ **Commit the request transaction before the reply is sent.** `src/app.ts` committed in `onResponse`, after the response had gone out, so a client acting on a response at once could arrive before the data was saved; this was the cause of the flaky integration tests. The commit is now in `onSend`; a failed COMMIT becomes `500 commit_failed`; socket events still follow the commit. New `request-lifecycle` tests fail on the old code; full suite 673 of 673, three runs | M | — |
-| 6.9 | ☐ **Make nginx re-resolve the API address.** `agora-ui/nginx.conf` resolves `api` once at startup, so a deploy that recreates `api` but not `web` returns 502 until `web` is restarted (seen on the #44 deploy). Use Docker's resolver with a variable upstream | XS | — |
+| 6.9 | ☑ **Make nginx re-resolve the API address.** `agora-ui/nginx.conf` resolves `api` once at startup, so a deploy that recreates `api` but not `web` returns 502 until `web` is restarted (seen on the #44 deploy). Use Docker's resolver with a variable upstream Done in #325 (2026-11-02): `nginx.conf` uses Docker's resolver. | XS | — |
 
 ## Risks / open decisions log
 | # | Item | Owner | Due |

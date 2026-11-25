@@ -1,5 +1,11 @@
 # Workspace isolation v1 (#79, #80; #84 deferred)
 
+- **Status:** Done
+- **Last checked:** 2026-11-25 against 0.4.5.
+- **Done:** Worktree per session, branch reporting and advisory file reservations (W1 to W3). Handoffs (#84) were built later.
+- **Left:** Nothing. The "Out of v1" items were never scheduled.
+- **Next:** None.
+
 > Planned 2026-10-18 in #general thread `01M57SSH4B30N11ER73R0CX4E9`: Gemini drafted, Codex reviewed against the code, Claude locked the scope, Eryk answered the open questions. **Build after PR B (feat/run-visibility) merges**: both touch `agora-host` adapters/scheduler and run completion.
 
 ## Decisions (Eryk)
