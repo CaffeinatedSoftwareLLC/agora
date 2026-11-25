@@ -133,6 +133,18 @@ describe('box recovery', () => {
         // Bounded. Measured: 2.4 to 4.1 s on Docker Desktop (runc); about 30 s on the arm64 CI runner under gVisor
         const took = Date.now() - began;
         console.log(`[recovery] the box reached Agora again ${Math.round(took / 1000)} s after the edge was recreated`);
+        // The timeline, for the next person who finds this slow: when boxd attached the edge, when the edge listened, what the box's neighbour table says
+        const stamp = (r: { stdout: string; stderr: string }, re: RegExp) => (r.stdout + r.stderr).split('
+').filter(l => re.test(l)).slice(-3).join(' | ');
+        const timeline = [
+            `compose returned ${new Date(began).toISOString()}`,
+            `edge: ${stamp(await compose('logs', '--no-color', '-t', '--tail', '20', 'box-edge'), /listening/)}`,
+            `boxd: ${stamp(await compose('logs', '--no-color', '-t', '--tail', '60', 'boxd'), new RegExp(`${box.id}.*edge attached`))}`,
+            `box neighbours: ${(await inBox(box.container, 'cat /proc/net/arp 2>&1 | tr "\n" ";"')).stdout}`,
+        ];
+        console.log(`[recovery] timeline
+${timeline.join('
+')}`);
         expect(took, 'ms until the box reached Agora again').toBeLessThan(75_000);
         await hostCheckedInSince(t);
         expect(await startedAt()).toBe(started);
