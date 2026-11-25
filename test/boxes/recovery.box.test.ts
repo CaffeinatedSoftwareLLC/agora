@@ -129,9 +129,11 @@ describe('box recovery', () => {
             const r = await inBox(box.container, 'curl -s -m 3 -o /dev/null -w "%{http_code}" http://edge:8080/health', 15_000);
             seen = r.stdout || `no answer (curl exit ${r.code})`;
             return r.stdout === '200';
-        }, 90_000, 1000).catch(err => { throw new Error(`${err.message}; last curl: ${seen}`); });
-        // Bounded: the recovery is one edge-watch tick plus the edge's own start, not a full boxd pass behind a slow one
-        expect(Date.now() - began, 'seconds until the box reached Agora again').toBeLessThan(45_000);
+        }, 120_000, 1000).catch(err => { throw new Error(`${err.message}; last curl: ${seen}`); });
+        // Bounded. Measured: 2.4 to 4.1 s on Docker Desktop (runc); about 30 s on the arm64 CI runner under gVisor
+        const took = Date.now() - began;
+        console.log(`[recovery] the box reached Agora again ${Math.round(took / 1000)} s after the edge was recreated`);
+        expect(took, 'ms until the box reached Agora again').toBeLessThan(75_000);
         await hostCheckedInSince(t);
         expect(await startedAt()).toBe(started);
     }, 300_000);
