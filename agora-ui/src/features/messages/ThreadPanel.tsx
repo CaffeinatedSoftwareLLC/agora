@@ -22,6 +22,10 @@ import { MicButton } from '../voice/MicButton';
 import { appendDictation } from '../voice/appendDictation';
 import { useUploadStore } from '../../stores/uploadStore';
 import { UploadPreview } from './UploadPreview';
+import { useUIStore } from '../../stores/uiStore';
+import { ReceiptsPanel } from '../receipts/ReceiptsPanel';
+import { ReceiptBadge } from '../receipts/ReceiptBadge';
+import { useReceiptAttention, useReceiptStore } from '../receipts/receiptStore';
 
 // Anchor the readable content: a prepend can remove its author header through grouping.
 function replyContent(row: HTMLElement) { return row.querySelector<HTMLElement>('.prose-msg') ?? row; }
@@ -85,6 +89,30 @@ export function ThreadPanel() {
     .map(r => `${r.id}:${(r.systemData as { status?: string } | undefined)?.status ?? ''}`).join(','), [replies]);
   const threadOwner = useThreadOwner(openThreadChannelId, openThreadId, handoffVersion);
   const { isExpanded: isRunExpanded, toggle: toggleRun } = useExpandedNoticeRuns(user?.id);
+
+  // Receipts (docs/receipts.md): loaded with the thread, so the tab and the badge are there before anyone asks
+  const threadView = useUIStore(s => s.threadView);
+  const setThreadView = useUIStore(s => s.setThreadView);
+  const receipts = useReceiptStore(s => openThreadId ? s.byThread.get(openThreadId) : undefined);
+  const receiptsLoading = useReceiptStore(s => !!openThreadId && s.loading.has(openThreadId));
+  const summaryAttention = (activeThreads.get(openThreadChannelId ?? '') ?? []).find(t => t.id === openThreadId)?.receiptAttention;
+  const attention = useReceiptAttention(openThreadId ?? '', summaryAttention);
+  useEffect(() => {
+    if (openThreadId && openThreadChannelId) void useReceiptStore.getState().load(openThreadChannelId, openThreadId);
+  }, [openThreadId, openThreadChannelId]);
+  const hasReceipts = !!receipts && receipts.length > 0;
+  // A thread with no receipts shows nothing extra; a link that asked for them waits for the answer
+  const showReceipts = threadView === 'receipts' && (hasReceipts || (receiptsLoading && !receipts));
+  const pendingScroll = useRef<string | null>(null);
+  useEffect(() => {
+    if (showReceipts || !pendingScroll.current) return;
+    const id = pendingScroll.current;
+    pendingScroll.current = null;
+    requestAnimationFrame(() => {
+      const row = listRef.current?.querySelector<HTMLElement>(`[data-message-id="${id}"]`);
+      if (row) { nearBottom.current = false; row.scrollIntoView({ block: 'center' }); }
+    });
+  }, [showReceipts]);
 
   useLayoutEffect(() => {
     const el = listRef.current;
@@ -229,6 +257,7 @@ export function ThreadPanel() {
             <span className="ml-2 align-middle"><ProtocolBadge protocol={sessionProtocol} /></span>
           )}
           {threadOwner && <ThreadOwnerBadge owner={threadOwner} />}
+          <ReceiptBadge count={attention} className="ml-2 align-middle" />
         </h2>
         <div className="flex items-center gap-1">
           {canClose && (
@@ -255,6 +284,20 @@ export function ThreadPanel() {
         </div>
       </div>
 
+      {hasReceipts && (
+        <div role="tablist" aria-label="Thread view" className="flex shrink-0 gap-1 border-b border-border px-3 py-1.5">
+          {([['replies', 'Replies'], ['receipts', 'Receipts']] as const).map(([view, label]) => (
+            <button key={view} type="button" role="tab" aria-selected={showReceipts ? view === 'receipts' : view === 'replies'}
+              onClick={() => setThreadView(view)}
+              className={`inline-flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-[13px] font-medium md:min-h-9 ${(showReceipts ? view === 'receipts' : view === 'replies') ? 'bg-surface-hover text-text' : 'text-text-muted hover:bg-surface-hover'}`}>
+              {label}
+              {view === 'receipts' && <span className="font-mono text-[12px] text-text-muted">{receipts?.length}</span>}
+              {view === 'receipts' && <ReceiptBadge count={attention} />}
+            </button>
+          ))}
+        </div>
+      )}
+
       {waiting && <ThreadWaitingBanner waiting={waiting} channelId={openThreadChannelId} />}
 
       {/* Parent message preview */}
@@ -278,8 +321,15 @@ export function ThreadPanel() {
         </div>
       )}
 
+      {showReceipts && (
+        <div role="tabpanel" aria-label="Receipts" className="min-h-0 flex-1 overflow-y-auto">
+          <ReceiptsPanel channelId={openThreadChannelId} threadId={openThreadId}
+            onShowMessage={id => { pendingScroll.current = id; setThreadView('replies'); }} />
+        </div>
+      )}
+
       {/* Reply list */}
-      <div ref={listRef} role="log" aria-label="Thread replies" style={{ overflowAnchor: 'none' }} onScroll={e => {
+      <div ref={listRef} hidden={showReceipts} role="log" aria-label="Thread replies" style={{ overflowAnchor: 'none' }} onScroll={e => {
         const el = e.currentTarget;
         nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 60;
         const anchor = prepend.current;
@@ -338,11 +388,11 @@ export function ThreadPanel() {
       </div>
 
       {/* Live output of an agent working on this thread (docs/live-output.md); gone when its run ends */}
-      {Object.values(threadStreams).filter(v => v.threadId === openThreadId).map(v =>
+      {!showReceipts && Object.values(threadStreams).filter(v => v.threadId === openThreadId).map(v =>
         <div key={v.runId} className="shrink-0 px-3 pb-1"><LiveWork stream={v} name={v.profile ?? 'Agent'} /></div>)}
 
       {/* Reply input or closed banner */}
-      {isClosed ? (
+      {showReceipts ? null : isClosed ? (
         <div className="shrink-0 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-1">
           <div
             className="flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-[13px]"

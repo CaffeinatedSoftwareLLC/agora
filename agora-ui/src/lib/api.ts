@@ -374,7 +374,7 @@ export type AIConnectionResult = { ok: boolean; error?: string };
 /** Tools a model agent can be given (src/ai/model-agent-tools.ts). */
 export const MODEL_AGENT_TOOLS = [
   'read_history', 'post_message', 'file_search', 'file_read',
-  'task_list', 'task_create', 'task_update', 'canvas_publish', 'runtime_exec',
+  'task_list', 'receipt_list', 'task_create', 'task_update', 'canvas_publish', 'runtime_exec',
 ] as const;
 export type ModelAgentTool = typeof MODEL_AGENT_TOOLS[number];
 

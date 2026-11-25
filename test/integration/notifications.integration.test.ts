@@ -250,7 +250,8 @@ describe('task cards and collaboration', () => {
         const got = await notificationsOf(member.userId, 'collab');
         expect(got).toHaveLength(1);
         expect(got[0].label).toBe('Collaboration finished in #general');
-        expect(got[0].url).toBe(`/app/${channelId}?thread=${parent.id}`);
+        // Opens on the thread's receipts: the claim and the owner's verdict are what the person came for
+        expect(got[0].url).toBe(`/app/${channelId}?thread=${parent.id}&view=receipts`);
         expect(await notificationsOf(owner.userId, 'collab')).toHaveLength(0);
 
         const second = await post(member.auth, 'another plan');

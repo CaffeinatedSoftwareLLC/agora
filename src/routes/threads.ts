@@ -498,7 +498,7 @@ export async function threadRoutes(app: FastifyInstance) {
                             u.username AS author_username, u.bot AS author_bot, u.avatar_url AS author_avatar_url,
                             previews.replies AS preview_replies, latest.protocol AS latest_protocol,
                             latest.id AS protocol_message_id, latest.author_username AS protocol_author_username,
-                            starter.started_here
+                            starter.started_here, COALESCE(rc.attention, 0)::int AS receipt_attention
                      FROM messages p
                      LEFT JOIN users u ON u.id = p.author_id
                      LEFT JOIN users cb ON cb.id = p.thread_closed_by
@@ -534,6 +534,13 @@ export async function threadRoutes(app: FastifyInstance) {
                          WHERE s.thread_id = p.id AND s.protocol->>'state' = 'START'
                          ORDER BY s.id ASC LIMIT 1
                      ) starter ON true
+                     LEFT JOIN LATERAL (
+                         -- Receipts that need a person (docs/receipts.md): any receipt the owner or a director
+                         -- disputed, and a claim Agora found contradicted that nobody has accepted yet
+                         SELECT COUNT(*) AS attention FROM thread_receipts tr
+                         WHERE tr.thread_id = p.id
+                           AND (tr.verdict = 'disputed' OR (tr.grade = 'contradicted' AND tr.verdict IS NULL))
+                     ) rc ON true
                      WHERE ${where}${before ? ` AND ${sortColumn} < $3` : ''}
                      ORDER BY ${sortColumn} DESC
                      LIMIT $${params.length}`;
@@ -580,6 +587,8 @@ export async function threadRoutes(app: FastifyInstance) {
             closeReason: row.thread_close_reason ?? null,
             successorId: row.thread_successor_id?.trim() || null,
             closedByUsername: row.closed_by_username ?? null,
+            // Disputed receipts and contradicted claims nobody has accepted (the badge on the thread, docs/receipts.md)
+            receiptAttention: row.receipt_attention,
             // A newer request for the caller at the top of the channel: check it before resuming this one
             newerRequestId: newer && newer.at > new Date(row.last_reply_at).getTime() ? newer.id : null,
             latestProtocol: row.latest_protocol ? {

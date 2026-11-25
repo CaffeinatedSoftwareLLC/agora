@@ -977,3 +977,51 @@ describe('row-level security on both tables', () => {
         expect((await receipts(start.id))[0].votes[0].reason).toBe('not now');
     });
 });
+
+describe('the thread list counts the receipts that need a person', () => {
+    const attention = async (threadId: string) => {
+        const res = await ctx.request.get(`/channels/${channelId}/threads?limit=10`).set(owner.auth);
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        return res.body.find((t: any) => t.id === threadId)?.receiptAttention as number | undefined;
+    };
+    const verdict = (receiptId: string, body: object) =>
+        ctx.request.post(`/channels/${channelId}/receipts/${receiptId}/verdict`).set(owner.auth).send(body);
+
+    it('a contradicted claim counts until the owner accepts it; a disputed one counts until it is accepted; a verified one never counts', async () => {
+        // Contradicted: the run failed after the DONE
+        const run = await runFor(codex);
+        await tokenPurpose(codex, 'host');
+        await reply(codex.auth, run.threadId, `${header('fix', 'DONE')}\nFixed.`);
+        await ctx.request.post(`/agent-hosts/@me/runs/${run.runId}/fail`).set(hostAuth)
+            .send({ claimToken: run.claimToken, error: 'cli_failed_or_invalid_output', message: 'exit 1', retryable: false });
+        const [claim] = await receipts(run.threadId);
+        expect(claim).toMatchObject({ grade: 'contradicted' });
+        expect(await attention(run.threadId)).toBe(1);
+
+        // Disputing keeps it counted (once); accepting resolves it
+        expect((await verdict(claim.id, { verdict: 'disputed', note: 'Still broken.' })).status).toBe(200);
+        expect(await attention(run.threadId)).toBe(1);
+        expect((await verdict(claim.id, { verdict: 'accepted' })).status).toBe(200);
+        expect(await attention(run.threadId)).toBe(0);
+
+        // Unverified is not an alarm; disputing it is
+        const start = await post(codex.auth, `${header('fix', 'START')}\nFix it.`);
+        await reply(codex.auth, start.id, `${header('fix', 'DONE')}\nFixed.`);
+        expect(await attention(start.id)).toBe(0);
+        const [unverified] = await receipts(start.id);
+        expect((await verdict(unverified.id, { verdict: 'disputed', note: 'Not shown to me.' })).status).toBe(200);
+        expect(await attention(start.id)).toBe(1);
+
+        // A dispute counts on any kind of receipt: a decision round too
+        const round = await post(codex.auth, `${header('plan', 'START')}
+participants: [codex, claude]`);
+        await reply(claude.auth, round.id, `${header('plan', 'DECIDE')}
+AGREE`);
+        await reply(codex.auth, round.id, `${header('plan', 'DECIDE')}
+BLOCK too big`);
+        expect(await attention(round.id)).toBe(0);
+        const [decision] = await receipts(round.id, owner.auth, 'decision');
+        expect((await verdict(decision.id, { verdict: 'disputed', note: 'Decide again.' })).status).toBe(200);
+        expect(await attention(round.id)).toBe(1);
+    });
+});

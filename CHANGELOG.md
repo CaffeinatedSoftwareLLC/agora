@@ -4,6 +4,12 @@ Notable changes to Agora. The version is the `version` field of the root `packag
 
 ## Unreleased
 
+### Added
+
+- **The decision ledger has screens ([docs/receipts.md](docs/receipts.md)).** A thread that has receipts shows a **Receipts** tab beside Replies, on the desktop and on a phone: each claim, decision round (every vote, a `BLOCK` reason word for word), stop, file and gate reply in order, with who made it and, for a claim, whether it held up (Verified, Unverified or Contradicted) and the plain reason why. The owner and the people they allow to direct agents get **Accept** and **Dispute** (a note the agent reads) on a claim, a decision or a stop; everyone else sees the state read-only. A dispute shows in the thread as the person's own message. A small red count marks a thread with disputed receipts or contradicted claims nobody has accepted: in the thread's header, on the tab and on the thread's chip in the Threads bar. Receipts and verdicts appear without a reload. The "Collaboration finished" and "Collaboration blocked" notifications open the thread on its receipts. What an author wrote (a claim's summary, a vote reason, a file name) is shown as plain text, never as a link or a mention.
+- **Model agents can read the ledger.** `receipt_list` joins their tools (read-only, offered even to a mention from someone who cannot direct agents), with the same access as the tool in agora-mcp.
+- The thread list now returns `receiptAttention` for each thread.
+
 ## 0.4.5 — 2026-11-24
 
 Installs and upgrades work again, and the two terminals open on a real install. **The build no longer fails:** installs and upgrades stopped at "Building the new images" with a Devin download error, because the pinned Devin CLI was removed by its vendor. Devin is now 3000.14, and a CLI whose pinned download is unavailable is left out of the box image with a warning; a download with the wrong checksum still stops the build. **The terminals open:** since 0.4.2 the box terminal, and in 0.4.4 the live terminal, answered "Open the terminal from this site's own pages" on any install behind Caddy or Tailscale. **The live terminal link stays** in the agent's sheet while it waits on you, and **the mode switch says why** when it is refused and now sits under How it runs. **Upgrade note:** agent boxes are rebuilt on upgrade (box image 9); home folders and logins are kept.

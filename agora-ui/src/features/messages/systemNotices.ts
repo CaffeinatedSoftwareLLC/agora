@@ -13,6 +13,8 @@ const CARD_EVENTS = new Set([
   'task_card',
   'subtask',
   'provider_terms',
+  // A person's dispute of a receipt, with their note (docs/receipts.md)
+  'receipt_verdict',
   // Carries Continue / Raise limit / Turn off controls (#23); folding it would hide them
   'loop_guard',
 ]);

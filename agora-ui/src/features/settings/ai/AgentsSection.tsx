@@ -26,6 +26,7 @@ const TOOL_INFO: Record<ModelAgentTool, string> = {
   file_search: 'Search shared files',
   file_read: 'Read shared files',
   task_list: 'List task cards',
+  receipt_list: 'Read the receipts ledger of a thread or channel',
   task_create: 'Create task cards (needs direct permission in the channel)',
   task_update: 'Update task cards (needs direct permission in the channel)',
   canvas_publish: 'Publish to the canvas',

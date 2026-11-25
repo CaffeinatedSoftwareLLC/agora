@@ -7,12 +7,15 @@ import { useAuthStore } from '../../stores/authStore';
 import { useUIStore } from '../../stores/uiStore';
 import type { MessagePayload } from '../../lib/contracts/ws-events';
 import { ThreadPanel } from './ThreadPanel';
+import { useReceiptStore } from '../receipts/receiptStore';
 
 vi.hoisted(() => vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn() }));
 vi.mock('../agents/handoffs', () => ({ useThreadOwner: () => null }));
 // These tests count the panel's own requests; live output (its tail request) has its own tests
 vi.mock('../agents/runStream', () => ({ useRunStreams: () => ({}) }));
 vi.mock('../voice/MicButton', () => ({ MicButton: () => null }));
+// Nor the receipts request the panel makes when a thread opens (tested in features/receipts)
+vi.mock('../receipts/ReceiptsPanel', () => ({ ReceiptsPanel: () => null }));
 // Each reply's action buttons, rendered 66 times and walked by every role query, pushed the first test to
 // 3–6 s, past vitest's 5 s timeout. Scrolling never uses them; MessageItem's real .prose-msg anchor stays.
 vi.mock('./MessageActions', () => ({ MessageActions: () => null }));
@@ -30,6 +33,7 @@ beforeEach(() => {
   useMessageStore.setState({ byChannel: new Map() });
   useAuthStore.setState({ user: { id: 'me', username: 'me' } });
   useUIStore.setState({ activeOverlay: null, aux: 'thread' });
+  useReceiptStore.setState({ load: vi.fn(async () => {}) });
 });
 afterEach(cleanup);
 

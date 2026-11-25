@@ -7,6 +7,8 @@ import { useVoiceStore } from '../features/voice/voiceStore';
 type ConnectionStatus = 'connected' | 'reconnecting' | 'disconnected';
 
 export type AuxView = 'thread' | 'files' | 'members' | 'project' | 'tasks' | 'canvas';
+/** The thread panel shows the replies or the thread's receipts (docs/receipts.md). */
+export type ThreadView = 'replies' | 'receipts';
 /** What the canvas pane shows: an artifact (a version, or the latest when null), or the channel's list. */
 export interface CanvasTarget { channelId: string; artifactId: string | null; version: number | null }
 export interface Overlay {
@@ -31,7 +33,9 @@ interface UIState {
   openAux: (kind: AuxView) => void;
   toggleAux: (kind: AuxView) => void;
   closeAux: () => void;
-  openThreadView: (channelId: string, threadId: string) => void;
+  openThreadView: (channelId: string, threadId: string, view?: ThreadView) => void;
+  threadView: ThreadView;
+  setThreadView: (view: ThreadView) => void;
   canvas: CanvasTarget | null;
   /** The pane the canvas replaced, so closing it goes back (e.g. to the thread it was opened from). */
   canvasReturn: AuxView | null;
@@ -100,9 +104,11 @@ export const useUIStore = create<UIState>((set, get) => ({
   toggleAux: (kind) => set(s => ({ aux: s.aux === kind ? null : kind, navOpen: false })),
   // Closing a canvas opened from a thread goes back to the thread
   closeAux: () => set(s => ({ aux: s.aux === 'canvas' ? s.canvasReturn : null, canvasReturn: null })),
-  openThreadView: (channelId, threadId) => {
+  threadView: 'replies',
+  setThreadView: (view) => set({ threadView: view }),
+  openThreadView: (channelId, threadId, view = 'replies') => {
     useThreadStore.getState().openThread(channelId, threadId);
-    set({ aux: 'thread', navOpen: false });
+    set({ aux: 'thread', navOpen: false, threadView: view });
   },
   canvas: null,
   canvasReturn: null,

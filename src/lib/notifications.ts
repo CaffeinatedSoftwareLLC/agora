@@ -50,8 +50,8 @@ export function notificationJson(r: any): PublicNotification {
 }
 
 /** The UI path a notification opens: the channel, with the thread panel open for a thread. */
-export function notificationUrl(channelId: string, threadId?: string | null): string {
-    return `/app/${channelId.trim()}${threadId ? `?thread=${threadId.trim()}` : ''}`;
+export function notificationUrl(channelId: string, threadId?: string | null, view?: 'receipts'): string {
+    return `/app/${channelId.trim()}${threadId ? `?thread=${threadId.trim()}${view ? `&view=${view}` : ''}` : ''}`;
 }
 
 /** Labels are at most 120 characters (the relay's limit for title and body). */
@@ -114,6 +114,8 @@ export interface NotifyInput {
     recipients: string[];
     channelId: string;
     threadId?: string | null;
+    /** Open the thread on its receipts instead of its replies (a collaboration's outcome). */
+    view?: 'receipts';
     /** Built from the channel name: (channel) => "Approval waiting in #general". */
     label: (channel: string) => string;
     /** Never notified, e.g. the person who acted. */
@@ -138,7 +140,7 @@ async function insertNotifications(c: any, input: NotifyInput): Promise<string[]
     const channel = (await c.query('SELECT name, server_id FROM channels WHERE id = $1', [channelId])).rows[0];
     if (!channel) return [];
     const label = clip(input.label(channel.name));
-    const url = notificationUrl(channelId, threadId);
+    const url = notificationUrl(channelId, threadId, input.view);
 
     // Humans with an active account who have not switched this type off
     const candidates = await c.query(
@@ -317,7 +319,7 @@ export async function notifyReview(c: any, input: { channelId: string; threadId?
 export async function notifyCollab(c: any, input: { channelId: string; threadId: string; starterId: string | null; authorId: string; outcome: 'done' | 'block' }): Promise<string[]> {
     if (!input.starterId) return [];
     return notify(c, {
-        type: 'collab', recipients: [input.starterId], channelId: input.channelId, threadId: input.threadId, exclude: [input.authorId],
+        type: 'collab', recipients: [input.starterId], channelId: input.channelId, threadId: input.threadId, view: 'receipts', exclude: [input.authorId],
         label: ch => input.outcome === 'done' ? `Collaboration finished in #${ch}` : `Collaboration blocked in #${ch}`,
     });
 }

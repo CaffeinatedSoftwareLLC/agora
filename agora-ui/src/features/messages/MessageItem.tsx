@@ -14,6 +14,7 @@ import { RuntimeCard } from './RuntimeCard';
 import { NoticeText } from './SystemNoticeRun';
 import { RunApprovalCard, ToolApprovalCard } from '../agents/ToolApprovalCard';
 import { HandoffCard } from '../agents/HandoffCard';
+import { VerdictMessage } from '../receipts/VerdictMessage';
 import { EdgeRequestCard } from '../boxes/EdgeRequestCard';
 import { PermissionRelayCard } from '../agents/PermissionRelayCard';
 import { TaskThreadNotice } from '../tasks/TaskThreadNotice';
@@ -118,6 +119,9 @@ export function MessageItem({ message, isGrouped, isOwn, onEdit, onDelete, chann
   if (message.systemEvent === 'agent_handoff') {
     return <HandoffCard message={message} />;
   }
+
+  // A person disputed a receipt: their note, as their own words
+  if (message.systemEvent === 'receipt_verdict') return <VerdictMessage message={message} />;
 
   if (message.systemEvent === 'agent_permission_relay') {
     return <PermissionRelayCard message={message} />;
