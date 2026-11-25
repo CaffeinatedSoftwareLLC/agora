@@ -1,6 +1,12 @@
 # Agora post-beta roadmap
 
-Status: proposed direction, captured from the owner discussion on 2026-10-19.
+- **Status:** Not started
+- **Last checked:** 2026-11-25 against 0.4.5.
+- **Done:** Nothing from this roadmap is built.
+- **Left:** All five parts: beta reliability, scoped automation with grants, project memory (issue 231 belongs here), on-demand skills, tools and integrations, and capability selection with Laya.
+- **Next:** Specify the automation grant and build one recurring read-only briefing (the first milestone below).
+
+Note: proposed direction, captured from the owner discussion on 2026-10-19.
 Implementation order should respond to beta feedback. This document does not
 expand the beta release scope or claim that the proposed capabilities are built.
 

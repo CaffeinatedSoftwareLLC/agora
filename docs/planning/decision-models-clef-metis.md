@@ -1,5 +1,11 @@
 # Decision models: Cloudflare Clef, Clef Flash and GreenPT Metis
 
+- **Status:** Partly done
+- **Last checked:** 2026-11-25 against 0.4.5.
+- **Done:** The `cloudflare` (Clef, Clef Flash) and `greenpt` (Metis) adapters, per-model limits, question caps and callers that split their questions. The live contract was run once per provider.
+- **Left:** A self-hosted System One adapter; support for Workers AI through AI Gateway; an exact token count instead of a byte count; a separate Decision models settings page (issue 234); dropping the Metis workaround once GreenPT fixes its 500.
+- **Next:** None planned. Re-run the live contract after any adapter change.
+
 > Researched 2026-10-22 for the owner's task card: "Add additional decision models: Cloudflare and Metis. See if Clef Flash is supported by CPU; if so, smoke-test injections to see if it can be the default model."
 > Branch `feat/decision-models-clef-metis`. Live calls were made with the owner's authorisation on 2026-10-22 (308 calls; see "Live results"). No weights were downloaded.
 

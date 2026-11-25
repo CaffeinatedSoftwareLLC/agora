@@ -1,6 +1,12 @@
 # Agora Android and iOS apps
 
-> **Status:** Agreed 2026-10-24 (section 7). Phases 1, 3 and 4 and account deletion shipped in release 0.3.5 (2026-10-30): notifications #265, push relay #261, app shells #266, account deletion #293. Tested on a Samsung S26 (FCM) and an iPad (APNs sandbox). What is left before store submission is in [app-store-readiness.md](app-store-readiness.md).
+- **Status:** Partly done
+- **Last checked:** 2026-11-25 against 0.4.5.
+- **Done:** Phases 1, 3 and 4 (notifications, push relay, native shells) and account deletion. Phase 2 (web push) was dropped.
+- **Left:** Phase 5, store requirements: see `app-store-readiness.md`.
+- **Next:** Create the apps in Play Console and App Store Connect.
+
+> **Origin:** Agreed 2026-10-24 (section 7). Phases 1, 3 and 4 and account deletion shipped in release 0.3.5 (2026-10-30): notifications #265, push relay #261, app shells #266, account deletion #293. Tested on a Samsung S26 (FCM) and an iPad (APNs sandbox). What is left before store submission is in [app-store-readiness.md](app-store-readiness.md).
 
 ## 1. Goal
 
@@ -43,7 +49,7 @@ Use **Capacitor** to wrap the user's own Agora instance in a native WebView, wit
 - Eryk has the store accounts, the signing setup and a Mac, so notifications go native-only.
 - Browser push (a service worker with VAPID keys) can be added later if self-hosters ask for it.
 
-### Phase 3: Push relay (built, #261; not deployed yet)
+### Phase 3: Push relay (done: built in #261, running on Heroku since 0.4.0; a push to a real phone through it is not yet checked)
 - Self-hosted instances cannot hold Caffeinated Software's FCM and APNs signing keys. Instead, a small relay run by Caffeinated Software holds them and forwards pushes. Mastodon and Matrix (Sygnal) work the same way.
 - **Registration:** the app registers with the relay and gets an opaque push handle. It gives the instance only that handle, never the raw FCM or APNs token.
 - **Sending:** the instance POSTs `{handle, type, label, deep link}` to the relay. A handle is bound to one instance, so a leaked handle cannot be used to spam from elsewhere. The relay is rate-limited per handle.
@@ -56,7 +62,7 @@ Use **Capacitor** to wrap the user's own Agora instance in a native WebView, wit
 - **Android:** builds on Windows with Android Studio. Release goes through Play Console internal testing, then closed testing, then production.
 - **iOS:** needs Xcode, which means macOS: a Mac, or a cloud macOS runner (GitHub Actions or Codemagic). Release goes through TestFlight, then review.
 
-### Phase 5: Store requirements (in progress; checklist in [app-store-readiness.md](app-store-readiness.md))
+### Phase 5: Store requirements (not finished; checklist in [app-store-readiness.md](app-store-readiness.md))
 - **In-app account deletion.** Apple requires it for apps where users can create an account. Done in #293: Settings → Account & security → Delete account ([docs/account-deletion.md](../account-deletion.md)).
 - **Privacy policy** and data disclosures (Apple privacy labels, Play Data safety). Drafted: [docs/privacy-policy.md](../privacy-policy.md), and the form answers in the readiness checklist. Not yet hosted.
 - **Demo instance with a reviewer login.** Without it, Apple review can't sign in and will reject the app. Proposed in the readiness checklist; not created.

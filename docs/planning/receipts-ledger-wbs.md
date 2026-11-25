@@ -1,8 +1,14 @@
 # Work Breakdown Structure — Receipts ledger
 
+- **Status:** Partly done
+- **Last checked:** 2026-11-25 against 0.4.5.
+- **Done:** The server slice: migration 095, the writer and grader, routes, MCP tools `receipt_list` and `receipt_attach`, tests and `docs/receipts.md`.
+- **Left:** No screen exists yet. U1 receipts panel, U2 verdict card with Accept and Dispute, U3 count badge, U4 `receipt_list` for model agents, U5 check a self-reported commit through the host, U6 live test on a running instance, U7 `receipt_lookup` and crystallization.
+- **Next:** U1, the receipts panel in the thread view.
+
 > Planned 2026-10-30 (PR #301, never built). Refreshed 2026-11-12 with the first slice: the server side, the MCP tools, tests and docs. The user guide is [docs/receipts.md](../receipts.md).
 > Sizes: **XS** · **S** · **M** · **L** are relative to each other, not calendar promises.
-> Status: ☐ todo · ☑ done
+> Marks: ☐ todo · ☑ done
 
 ## What it is
 

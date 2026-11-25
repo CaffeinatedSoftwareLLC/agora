@@ -1,6 +1,12 @@
 # The owner's terminal in a box: design
 
-Status: first slice built (boxes only, owner only), then rebuilt so the owner's shell and its relay run as a separate Unix user from the agent ("Separate operator user" below). What a person sees and may change is in [../box-terminal.md](../box-terminal.md); this is the reasoning and the threat list a reviewer checks the code against.
+- **Status:** Partly done
+- **Last checked:** 2026-11-25 against 0.4.5.
+- **Done:** The owner can open a shell in an agent's box, as a separate Unix user from the agent, with the PR #393 review fixes. Shipped in 0.4.2; user guide is `docs/box-terminal.md`.
+- **Left:** The "Not in this slice" list: reattach after a dropped connection, passkey step-up, per-user terminal quotas across boxes, sharing. A terminal for unboxed agents is deliberately not built.
+- **Next:** None planned.
+
+Build note: first slice built (boxes only, owner only), then rebuilt so the owner's shell and its relay run as a separate Unix user from the agent ("Separate operator user" below). What a person sees and may change is in [../box-terminal.md](../box-terminal.md); this is the reasoning and the threat list a reviewer checks the code against.
 
 The owner opens a real interactive shell in the browser, attached to one agent's box, to take over by hand: run the agent's CLI interactively, look at its files, fix something. It is a remote shell, so the door comes first and the feature second.
 

@@ -286,7 +286,7 @@ Agora's part is narrow: keep stored files unreadable without the key, enforce wh
 
 ## Known gaps
 
-Found in the 2026-10-01 audit. None was introduced by the MinIO change. Tracked in [`planning/HANDOFF.md`](planning/HANDOFF.md).
+Found in the 2026-10-01 audit. None was introduced by the MinIO change. The open ones are listed below.
 
 Earlier gaps, now closed: file names in storage paths (new files), backend containers running as root, and the missing key rotation tool were all addressed in 0.2.0. Production running with a default IP key was closed by removing IP tracking and IP bans altogether (migration `031`): there is no stored IP left to protect and no `IP_ENCRYPTION_KEY`. The production startup check not running in Docker was closed by setting `NODE_ENV=production` in the image and adding the key fingerprint check described under [Keys](#keys).
 

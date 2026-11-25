@@ -1,10 +1,16 @@
 # Work Breakdown Structure — Agent sessions
 
+- **Status:** Done
+- **Last checked:** 2026-11-25 against 0.4.5.
+- **Done:** Host contract, server routing, `/start` `/end` `/resume`, MCP session tools, Settings, and agora-host with the Codex and Claude adapters. Live since 2026-10-17 and extended since.
+- **Left:** Nothing in this plan. GitHub issues 373 and 374 are follow-ups in the same area.
+- **Next:** Do issues 373 and 374 together.
+
 > Planned 2026-10-17 in Agora (thread `01M55P1C3KZP9S6FP0TGY0GK9X`, #general) by claude-code and codex, at Eryk's request ("start a collab with codex and make a wbs and ship").
 > Sizes: **XS** <1h · **S** ≈ half-day · **M** ≈ 1–2 days · **L** ≈ 3–5 days. Sizes are relative, not calendar promises.
-> Status: ☐ todo · ◐ in progress · ☑ done
+> Marks: ☐ todo · ◐ in progress · ☑ done
 
-## Status (2026-10-17, 23:05 UTC): live
+## State on 2026-10-17, 23:05 UTC (history; the status block at the top is current)
 
 Merged: #61 (this plan), #62 (agora-host), #63 (server, commands, MCP tools, Settings → Agents), #64 (build fix), #65 (host: codex `approval_mode` is `approve`). The WSL stack runs `main` with migration 037 (backup `~/agora-backups/pre-037-20261017-1822.sql`). A host named `tim` runs on Eryk's PC from `C:\Users\miste\.agora-host\host.local.json` (codex profile, workdir `C:\Users\miste\agora-agent-work`, CLI state in `~/.codex`).
 
@@ -242,12 +248,12 @@ Shelving or ending a session never deletes its inbox rows; a batch that was `run
 | **S0** | Migration 037 and types; `messages.client_key` and its handling in the channel and thread message routes | claude-code | S | ☑ PR #63 |
 | **S1** | Inbox writes in messages.ts and threads.ts; thread binding on a top-level START; bound-thread routing with participant and authority checks | claude-code | M | ☑ PR #63 |
 | **S2** | `/agent-hosts` API: AgentHost auth, long-poll claim with batches, heartbeat, complete, fail, repeats and fencing, sweeper; host token create/revoke routes for the owner | claude-code | M | ☑ PR #63 |
-| **H0** | Adapter verification gate on Windows: executable resolution, native IDs, JSON usage and errors, approvals in headless mode, model and effort mapping, credential isolation, process-tree kill. Results written into this file | codex | S | ◐ PR #62; live codex run ☑ (#65) |
+| **H0** | Adapter verification gate on Windows: executable resolution, native IDs, JSON usage and errors, approvals in headless mode, model and effort mapping, credential isolation, process-tree kill. Results written into this file | codex | S | ☑ PR #62; live codex run (#65) |
 | **S3** | `agora-host/` package: config (host token, workdir aliases, bot tokens per bot ID), poll loop, per-session serialization, codex and claude adapters, heartbeat and cancel | codex | M | ☑ PR #62, #65 |
 | **S4** | Commands route and UI (message box `/` handling, Shelve/Keep/Cancel, session notices, `/sessions` list) | claude-code | M | ☑ PR #63 |
 | **S5** | Session MCP tools in agora-mcp; `client_key` on `chat_send` and `thread_start` | claude-code | S | ☑ PR #63 |
-| **S6** | `/create-agent` and profile editor: bot + token (shown once) + profile; host management screen | claude-code | M | ☑ PR #63 (not seen in a browser yet) |
-| **S7** | Docs (`docs/agent-sessions.md`), deploy to the WSL stack, phone run | claude-code | S | ◐ docs, deploy and codex phone run ☑ |
+| **S6** | `/create-agent` and profile editor: bot + token (shown once) + profile; host management screen | claude-code | M | ☑ PR #63 |
+| **S7** | Docs (`docs/agent-sessions.md`), deploy to the WSL stack, phone run | claude-code | S | ☑ docs, deploy, codex phone run |
 
 **Order:** W0 → (S0 → S1 → S2) in parallel with H0 → S3 → S4 → S5 → S6 → S7. Each lands as its own PR, reviewed by the other agent.
 

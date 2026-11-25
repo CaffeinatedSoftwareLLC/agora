@@ -1,6 +1,12 @@
 # Live terminals
 
-Status: first slice built (this document says what, and what is later). Migration `104_live_terminal.sql`, box image version 8.
+- **Status:** Partly done
+- **Last checked:** 2026-11-25 against 0.4.5.
+- **Done:** Slice 1 shipped in 0.4.4 (a boxed Claude Code agent runs its own CLI in a terminal Agora owns; mode switch, hub, viewer page, controls hold) and its fixes in 0.4.5.
+- **Left:** The test on a real Claude Code box (the manual list at the end of this file) has not been run. Not started: the Terminals view with a tile per agent, custom layouts built by agents, grading a `DONE` against its live turn, live mode for Codex, Gemini, opencode and machine-host agents.
+- **Next:** Run the manual test on a real box.
+
+First slice shipped in 0.4.4 (this document says what, and what is later); fixes in 0.4.5. Migration `104_live_terminal.sql`, box image version 8.
 
 ## The idea
 

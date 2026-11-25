@@ -1,6 +1,12 @@
 # Store readiness: Google Play and the App Store
 
-> **Status:** 2026-10-30. Phase 5 of [mobile-apps.md](mobile-apps.md). Release 0.3.5 has the notifications, the push relay, the app shells and account deletion. On-device tests passed on a Samsung S26 (FCM) and an iPad (APNs sandbox). No iPhone has been tested. What is left is listed here: hosting the privacy policy, the store forms, a demo instance, the relay going live, and the bundle ID.
+- **Status:** Partly done
+- **Last checked:** 2026-11-25 against 0.4.5.
+- **Done:** App shells, the push relay (on Heroku), account deletion and the privacy policy draft. Tested on a Samsung S26 (FCM) and an iPad (APNs sandbox).
+- **Left:** Create the apps in both consoles; publish the privacy page and the delete-account page on agora.host; a demo instance with a reviewer login; the Play Data safety and App Store privacy forms; store listings; the iOS privacy manifest; a test on a real iPhone; a push to a real phone through the relay. Mostly owner steps.
+- **Next:** Create the apps in Play Console and App Store Connect (section 1, item 1).
+
+> **Note, 2026-10-30:** Phase 5 of [mobile-apps.md](mobile-apps.md). Release 0.3.5 has the notifications, the push relay, the app shells and account deletion. On-device tests passed on a Samsung S26 (FCM) and an iPad (APNs sandbox). No iPhone has been tested. What is left is listed here: hosting the privacy policy, the store forms, a demo instance, the relay going live, and the bundle ID.
 
 Privacy policy draft: [docs/privacy-policy.md](../privacy-policy.md).
 
@@ -11,7 +17,7 @@ Privacy policy draft: [docs/privacy-policy.md](../privacy-policy.md).
 | 1 | **Create the apps** in Play Console and App Store Connect with the bundle ID `com.caffeinatedsoftware.agora` (confirmed 2026-10-30; it can't change after the first upload). | Every upload |
 | 2 | **Privacy contact address and effective date** for the policy. Use a role address, not a personal one: the policy is public. | Publishing the policy |
 | 3 | **Publish the policy** at `https://agora.host/privacy` and the account-deletion page at `https://agora.host/delete-account` (section 4.3). | Both store forms |
-| 4 | **Relay host:** pick a Linux VPS, point `push.agora.host` at it, and put the FCM service account and the APNs `.p8` key on it (section 6). | Push in store builds |
+| 4 | **Relay host:** done. The relay runs on Heroku (0.4.0) and `agora-mobile` points at `push.agora.host`. Still to check: a push to a real phone through it, and the APNs key (section 6). | Push in store builds |
 | 5 | **Approve the demo instance plan** (section 5), then its host, `demo.agora.host`, and the reviewer passwords (kept in your password manager). | Review on both stores |
 | 6 | **Answer the Play Data safety form and the App Store privacy label** in the consoles, using sections 2 and 3. Decide the open question in 2.2. | Submission |
 | 7 | **Store listings:** screenshots, descriptions with the not-affiliated line, the content rating questionnaire, the category (Developer Tools / Productivity). | Submission |

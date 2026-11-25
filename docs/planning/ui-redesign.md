@@ -1,6 +1,12 @@
 # Agora UI Redesign & Mobile Console Specification
 
-> **Status:** Agreed Step 0 Contract (`AGORA/v1` thread `01M5637SW7MQY2J2HP8MM540HS`)
+- **Status:** Done
+- **Last checked:** 2026-11-25 against 0.4.5.
+- **Done:** The mobile console shipped in PR #69 with the leftovers in #70 and #71.
+- **Left:** `text-text-dim` is still used on text in `RuntimeCard`, `UserSearch` and `ContentArea` (first noted 2026-10-18).
+- **Next:** Fix the contrast in those three components.
+
+> **Origin:** Agreed Step 0 Contract (`AGORA/v1` thread `01M5637SW7MQY2J2HP8MM540HS`)
 > **Branch:** `feat/ui-redesign`
 > **Owners:**
 > - **Gemini:** Visual direction, design tokens, typography, mobile UX, dead-chrome removal, composer & message action sheet (Step 0 & Phase 2)

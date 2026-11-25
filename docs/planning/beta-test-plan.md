@@ -1,10 +1,16 @@
 # Beta test plan
 
+- **Status:** Partly done
+- **Last checked:** 2026-11-25 against 0.4.5.
+- **Done:** A Playwright harness with 25 specs in `e2e/`; the terms and security checks of section 6 were run on 2026-10-20 as integration tests; manual passes M01 to M06 are in `manual-ledger.csv`.
+- **Left:** The e2e suite is not in CI. The agent E2E with real CLIs (section 3) is not built. Manual sessions M07 to M21, the macOS pass and a fresh surface inventory are open. The plan was written at `ae0c0f3`; some of its facts have moved on (for example, issue 126 on runner cleanup is closed).
+- **Next:** Run manual session M07, or decide whether the e2e suite joins CI.
+
 > Written 2026-10-20 against `main` at `ae0c0f3` (after #123 and #124). It covers everything merged through PR #124. Sources: `README.md`, `CLAUDE.md`, `docs/*.md`, `docs/planning/*.md`, `agora-host/README.md` and the merged PR titles and bodies.
 >
-> **How to use it.** Section 1 lists every feature. Sections 2 and 3 describe the automated suites that still have to be built. Section 4 says what runs on which machine. Section 5 is Eryk's manual pass, phone first. Section 6 covers terms and security. Section 7 gives the order to run things in and how to report bugs.
+> **How to use it.** Section 1 lists every feature. Sections 2 and 3 describe the automated suites. The Playwright harness and its specs exist in `e2e/`; the agent E2E in section 3 is not built, and none of it runs in CI. Section 4 says what runs on which machine. Section 5 is Eryk's manual pass, phone first. Section 6 covers terms and security. Section 7 gives the order to run things in and how to report bugs.
 >
-> **Revision 2 (after Codex's review).** Codex reviewed head `0136675` and supplied the coverage ledger and scenario families this revision builds on: [beta-test-plan-review.md](beta-test-plan-review.md) (the review), [beta-test-coverage-review.md](beta-test-coverage-review.md) (37 scenario families, evidence contract, gates) and [beta-test-surfaces.csv](beta-test-surfaces.csv) (439-row discovery ledger at `ae0c0f3`). Credit for those three files is Codex's. Main changes: no code-run tests on the shared Docker daemon (§2.1), stable scenario IDs and result states (§0), operations and recovery tests (§3.5), a calibrated, reservation-budgeted vision check (§2.3), evidence retention without credentials (§2.4) and five-check manual sessions (§5).
+> **Revision 2 (after Codex's review).** Codex reviewed head `0136675` and supplied the scenario families, the evidence contract and the gates this revision builds on. Those review files are no longer kept; they are in git history. Main changes: no code-run tests on the shared Docker daemon (§2.1), stable scenario IDs and result states (§0), operations and recovery tests (§3.5), a calibrated, reservation-budgeted vision check (§2.3), evidence retention without credentials (§2.4) and five-check manual sessions (§5).
 >
 > **Ground rules for every test in this plan**
 > - **Destructive, revocation and fault-injection tests run only on a disposable instance**, never on the live WSL stack or Eryk's real account. Eryk's normal, non-destructive use of the live `main` deployment runs alongside automation once the first smoke passes (§7).
@@ -28,9 +34,9 @@
 
 ## 0. Scenario IDs, coverage ledger and result states
 
-**Scenario families** (stable IDs, from [beta-test-coverage-review.md](beta-test-coverage-review.md) §2): `ID-01…06` identity and access, `UI-01…08` collaboration and media, `AG-01…10` agents and code, `OP-01…08` runtime, cloud and operations, `SEC-01…05` cross-cutting authority and failure. Every automated test and manual check in this plan names one family ID, extended with a local suffix (`AG-04.siwc-deny`, `UI-05.canvas-escape`). The feature tables in §1 carry the family ID in their first column.
+**Scenario families** (stable IDs, from Codex's review): `ID-01…06` identity and access, `UI-01…08` collaboration and media, `AG-01…10` agents and code, `OP-01…08` runtime, cloud and operations, `SEC-01…05` cross-cutting authority and failure. Every automated test and manual check in this plan names one family ID, extended with a local suffix (`AG-04.siwc-deny`, `UI-05.canvas-escape`). The feature tables in §1 carry the family ID in their first column.
 
-**Coverage ledger.** [beta-test-surfaces.csv](beta-test-surfaces.csv) lists 439 surfaces at `ae0c0f3` (178 HTTP endpoints, 35 MCP tools, 36 route modules, 14 UI feature folders, 176 existing test files as anchors). Before the first full run, every row gets `scenario_ids` filled in or a reviewed exclusion reason in `coverage_state`. The ledger is a starting inventory, not proof of coverage: socket events, workers, CLI commands (`agora-host`, `agora-mcp`), migrations and deployment entrypoints are reconciled separately. An existing test file is an anchor, not a passed scenario.
+**Coverage ledger.** An inventory of 439 surfaces at `ae0c0f3` (178 HTTP endpoints, 35 MCP tools, 36 route modules, 14 UI feature folders, 176 existing test files as anchors) was made for this plan and removed from the repo, because it is out of date; it is in git history as `docs/planning/beta-test-surfaces.csv`. Before the first full run, build a fresh one: every surface gets scenario IDs or a reviewed exclusion reason. An inventory is a starting point, not proof of coverage: socket events, workers, CLI commands (`agora-host`, `agora-mcp`), migrations and deployment entrypoints are reconciled separately. An existing test file is an anchor, not a passed scenario.
 
 **Scenario record** (one row per execution, kept in `e2e/results/<run-id>/ledger.csv`):
 
@@ -344,7 +350,7 @@ Each bullet is one test. `📸` marks a screenshot that goes to the vision check
 - Touch targets: a script asserts every `button` in cards is at least 44×44 CSS px (32 px for the notice drawer).
 - No horizontal scroll at 360 px width.
 
-**Coverage gaps closed below the UI** (vitest against a real test app and Postgres; the gaps in [beta-coverage-report.md](beta-coverage-report.md))
+**Coverage gaps closed below the UI** (vitest against a real test app and Postgres; the gaps found by the 2026-10-20 coverage reconciliation)
 
 | ID | Test | Expected |
 |---|---|---|
@@ -752,7 +758,7 @@ Each item: how to check, and what passes. Automated ones point to where they liv
 
 1. **Existing suites green on `main`** (PC): backend `npx vitest run test/unit` and `test/integration`; `agora-ui` `npx vitest run` + `npx vite build`; `agora-host` `npm test`; `agora-mcp` `npm run build && npm test`. A red suite is the first bug. (No `scripts/test-sandbox-gvisor.sh` on the live daemon; §2.1.)
 2. **File the runner-isolation bug** (§2.1) and keep code-run E2E disabled on the live daemon.
-3. **Reconcile coverage:** map every row of `beta-test-surfaces.csv` to scenario IDs or a reviewed exclusion; publish the environment manifest (instance identity, seeded roles, disposable repo/storage, available platforms and browsers, credential variable names).
+3. **Reconcile coverage:** map every surface of a fresh inventory (see §0) to scenario IDs or a reviewed exclusion; publish the environment manifest (instance identity, seeded roles, disposable repo/storage, available platforms and browsers, credential variable names).
 4. **Build the harness** (§2.1–2.4): preflight, direct `.env.e2e`, seeding with canaries, leak-scanner self-test, evidence areas. First smoke: setup, login, send, reconnect, one approval card (fake host), on the disposable non-runtime project.
 5. **Manual sessions start** as soon as that smoke passes: Eryk does M01 on `main` while automation continues; then one five-check session at a time. Destructive sessions (M19–M21) only on the disposable instance.
 6. **Playwright UI E2E** with the fake host, desktop then mobile project. Vision check advisory; calibrate it on the labelled set (§2.3) before considering it as a gate.
@@ -761,7 +767,7 @@ Each item: how to check, and what passes. Automated ones point to where they liv
 9. **Operations and recovery** (§3.5): upgrade, backup/restore, crash/redelivery, outages, per-provider connection matrix, soak.
 10. **Platform passes:** Windows, WSL (labelled WSL), macOS Option A (Mac test agent, from GitHub `main`), real phone. Missing platforms or keys are recorded as `blocked`, not skipped silently.
 11. **Fix wave:** triage `beta-test` issues, fix, re-run the affected scenarios.
-12. **Gates** (from Codex's coverage review §5): environment ready; coverage reconciled; candidate accepted (deterministic suites green, live provider and real-device checks done for claimed support, no open high-severity defect); recovery accepted (upgrade/restore and redelivery evidence); evidence published (SHA/config/version matrix, outcome ledger, failure artifacts, spend vs allowance, manual sign-offs, unresolved limitations). A large test count alone doesn't make the run exhaustive, and no suite proves the absence of bugs.
+12. **Gates** (from Codex's review): environment ready; coverage reconciled; candidate accepted (deterministic suites green, live provider and real-device checks done for claimed support, no open high-severity defect); recovery accepted (upgrade/restore and redelivery evidence); evidence published (SHA/config/version matrix, outcome ledger, failure artifacts, spend vs allowance, manual sign-offs, unresolved limitations). A large test count alone doesn't make the run exhaustive, and no suite proves the absence of bugs.
 
 ### 7.2 Bug reporting
 
