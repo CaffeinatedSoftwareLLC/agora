@@ -7,6 +7,7 @@
 # distro or disk as the install is lost with it. An upgrade's backup is copied out of the VM or
 # distro, and the copy checked, before the upgrade changes anything.
 
+# shellcheck disable=SC2034  # the constants are read by the scripts that source this file
 # Upgrade backups are named agora-<instance>-before-<version>-<time>.agorabk; one made with the
 # backup command is agora-<instance>-<time>.agorabk and is never removed by retention.
 DEFAULT_KEEP_BACKUPS=3
@@ -80,12 +81,17 @@ copy_bundle_verified() {
 # bundles of this instance beyond the newest <keep> (0: all are kept). Never touches a bundle made
 # with the backup command, and never the protected file. Prints one line per removal, then a total.
 prune_upgrade_backups() {
-    local dir=$1 inst=$2 keep=$3 protect=${4:-} f n=0 freed=0 sz
+    local dir=$1 inst=$2 keep=$3 protect=${4:-} f b n=0 freed=0 sz list=''
     [ "$keep" != 0 ] && [ -d "$dir" ] || return 0
     # newest first; the bundle's own name carries the time, so sort by name's stamp, not by mtime
-    local list
-    list=$(ls -1 "$dir" 2>/dev/null | grep -E "^agora-${inst}-before-.+-[0-9]{8}T[0-9]{6}Z\.agorabk\$" \
-        | awk '{ s = $0; sub(/\.agorabk$/, "", s); n = split(s, p, "-"); print p[n] " " $0 }' | sort -r | awk '{print $2}') || true
+    for f in "$dir"/agora-"$inst"-before-*.agorabk; do
+        [ -f "$f" ] || continue
+        b=$(basename "$f")
+        printf '%s' "$b" | grep -Eq -- '-[0-9]{8}T[0-9]{6}Z\.agorabk$' || continue
+        list="$list$(printf '%s' "$b" | sed 's/\.agorabk$//; s/.*-//') $b
+"
+    done
+    list=$(printf '%s' "$list" | sort -r | awk '{print $2}')
     while IFS= read -r f; do
         [ -n "$f" ] || continue
         n=$((n + 1))
@@ -135,8 +141,8 @@ space_need() { SPACE_NEEDS="${SPACE_NEEDS}$1|$2|$3
 # room? Prints one refusal line per disk that has too little and fails if there was any. A path
 # whose free space can't be read is not refused: a check that can't look doesn't block.
 space_check() {
-    local hint=$1 line path kb what dev free total seen='' bad=0 pth
-    while IFS='|' read -r path kb what; do
+    local hint=$1 path dev free total seen='' bad=0 pth
+    while IFS='|' read -r path _ _; do
         [ -n "$path" ] || continue
         dev=$(device_of "$path"); [ -n "$dev" ] || continue
         case " $seen " in *" $dev "*) continue ;; esac

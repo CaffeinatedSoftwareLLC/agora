@@ -207,7 +207,8 @@ case "$CMD" in
 
         # 1. Room, in the VM and on this Mac, before anything is stopped or copied
         step mac.space "Checking there is room for the upgrade"
-        set +e; sp=$(vm_sh "$VM" bash "$gs/install/upgrade.sh" --dir "$d" --check-space ${GPASS[@]+"${GPASS[@]}"} ${NI[@]+"${NI[@]}"} $([ "$FORCE" = 0 ] || echo --force) ${REST[@]+"${REST[@]}"}); c=$?; set -e
+        FORCEARG=(); [ "$FORCE" = 0 ] || FORCEARG=(--force)
+        set +e; sp=$(vm_sh "$VM" bash "$gs/install/upgrade.sh" --dir "$d" --check-space ${GPASS[@]+"${GPASS[@]}"} ${NI[@]+"${NI[@]}"} ${FORCEARG[@]+"${FORCEARG[@]}"} ${REST[@]+"${REST[@]}"}); c=$?; set -e
         printf '%s\n' "$sp" | sed '/^AGORA_BACKUP_EST_KB=/d'
         [ "$c" = 0 ] || die "not enough room in $VM for the upgrade; nothing was changed (the lines above say where). --force goes on anyway"
         est=$(printf '%s\n' "$sp" | sed -n 's/^AGORA_BACKUP_EST_KB=//p' | tail -n 1); est=${est:-0}

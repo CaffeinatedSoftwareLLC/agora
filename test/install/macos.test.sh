@@ -406,7 +406,7 @@ check_true 'copy-out fails: shows limactl'"'"'s own error' 'grep -q "No space le
 check_true 'copy-out fails: says the backup is still in the VM and nothing was changed' 'grep -q "could not be copied to $BK/$NEWBK" "$T/out" && grep -q "still in agora at" "$T/out" && grep -q "Nothing was changed" "$T/out"'
 check 'copy-out fails: no partial file left on the Mac' '' "$(ls "$BK")"
 for mode in size sha; do
-    up_reset; FAKE_ENV=(TMPDIR="$T/tmp" FAKE_COPY_CORRUPT=$mode); run "$V" upgrade --source "$T/relsrc/agora"
+    up_reset; FAKE_ENV=(TMPDIR="$T/tmp" FAKE_COPY_CORRUPT="$mode"); run "$V" upgrade --source "$T/relsrc/agora"
     check_true "copy-out, $mode mismatch: stops before the upgrade, no copy kept" '[ "$RC" = 1 ] && ! grep -q -- "--use-backup" "$CALLS" && [ -z "$(ls "$BK")" ]'
 done
 check_true 'copy-out, checksum mismatch: names both checksums' 'grep -q "SHA-256 (.*) differs from the backup" "$T/out"'
@@ -426,17 +426,18 @@ up_reset; FAKE_ENV=(TMPDIR="$T/tmp"); run "$V" upgrade --source "$T/relsrc/agora
 check_true '--backup-in-vm-only: no backup step, no copy, a warning, the VM script told' '[ "$RC" = 0 ] && ! grep -q -- "--backup-only" "$T/guest-upgrade-calls" && ! grep -q "^limactl copy agora:" "$CALLS" && grep -q "stays inside agora" "$T/out" && call_n 2 | grep -q -- "--backup-in-vm-only"'
 
 # retention on the Mac
+cnt() { local c=0 f; for f in "$1"/$2; do [ -e "$f" ] && c=$((c + 1)); done; echo "$c"; }
 mkbk() { mkdir -p "$BK"; head -c 1024 /dev/zero > "$BK/$1"; }
 seed() { up_reset; for d in 01 02 03 04; do mkbk "agora-agora-before-9.0.0-202601${d}T000000Z.agorabk"; done; mkbk "agora-agora-20260101T000000Z.agorabk"; }
 seed; FAKE_ENV=(TMPDIR="$T/tmp"); run "$V" upgrade --source "$T/relsrc/agora"
-check 'retention on the Mac: keeps the newest 3 upgrade backups' 3 "$(ls "$BK" | grep -c -- '-before-')"
+check 'retention on the Mac: keeps the newest 3 upgrade backups' 3 "$(cnt "$BK" '*-before-*')"
 check_true 'retention on the Mac: the oldest are gone, the newest stay, the backup command'"'"'s bundle stays' '[ ! -e "$BK/agora-agora-before-9.0.0-20260101T000000Z.agorabk" ] && [ ! -e "$BK/agora-agora-before-9.0.0-20260102T000000Z.agorabk" ] && [ -e "$BK/agora-agora-before-9.0.0-20260104T000000Z.agorabk" ] && [ -e "$BK/agora-agora-20260101T000000Z.agorabk" ]'
 check_true 'retention on the Mac: prints what it removed' '[ "$(grep -c "removed old upgrade backup" "$T/out")" = 2 ]'
 seed; FAKE_ENV=(TMPDIR="$T/tmp" FAKE_UPGRADE_EXIT=4); run "$V" upgrade --source "$T/relsrc/agora"
-check_true 'a failed upgrade deletes nothing on the Mac (the new copy is kept too)' '[ "$RC" = 1 ] && [ "$(ls "$BK" | grep -c -- "-before-")" = 5 ] && [ -e "$BK/agora-agora-20260101T000000Z.agorabk" ]'
+check_true 'a failed upgrade deletes nothing on the Mac (the new copy is kept too)' '[ "$RC" = 1 ] && [ "$(cnt "$BK" "*-before-*")" = 5 ] && [ -e "$BK/agora-agora-20260101T000000Z.agorabk" ]'
 check_true 'a failed upgrade: names the backup on the Mac for the way back' 'grep -q "the backup is also on this Mac: $BK/$NEWBK" "$T/out"'
 seed; FAKE_ENV=(TMPDIR="$T/tmp"); run "$V" upgrade --source "$T/relsrc/agora" --keep-backups 0
-check 'keep-backups 0 on the Mac: keeps all' 5 "$(ls "$BK" | grep -c -- '-before-')"
+check 'keep-backups 0 on the Mac: keeps all' 5 "$(cnt "$BK" '*-before-*')"
 check 'keep-backups: remembered for the next upgrade' 1 "$(grep -c '^keep_backups=0$' "$T/home/.agora/macos/agora.conf")"
 check_true 'keep-backups: forwarded to the VM, which remembers it too' 'call_n 3 | grep -q -- "--keep-backups 0"'
 run "$V" upgrade --source "$T/relsrc/agora" --keep-backups many

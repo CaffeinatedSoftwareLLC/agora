@@ -80,6 +80,7 @@ up() { # up [args]: the upgrade from the new release; exit code in code, output 
     if bash "$NEW/install/upgrade.sh" --dir "$OLD" --passphrase-file "$T/pass" --non-interactive "$@" > "$T/up.log" 2>&1; then code=0; else code=$?; fi
 }
 version_of() { sed -n 's/.*"version": "\(.*\)".*/\1/p' "$1/package.json"; }
+cnt() { local c=0 f; for f in "$1"/$2; do [ -e "$f" ] && c=$((c + 1)); done; echo "$c"; }
 nbk() { ls "$1"/*.agorabk 2>/dev/null | wc -l | tr -d ' '; }
 mkbk() { # mkbk <dir> <name>: a bundle of 1 KB
     mkdir -p "$1"; head -c 1024 /dev/zero > "$1/$2"
@@ -170,7 +171,7 @@ mkbk "$OLD/backups" "agora-$NAME-20260101T000000Z.agorabk"     # made with the b
 mkbk "$OLD/backups" "agora-other-before-0.8.0-20260101T000000Z.agorabk"   # another install's
 up
 check 'retention: exit 0' 0 "$code"; [ "$code" = 0 ] || tail -n 30 "$T/up.log"
-check 'retention: keeps the newest 3 upgrade backups (the new one and 2 older)' 3 "$(ls "$OLD/backups" | grep -c "^agora-$NAME-before-")"
+check 'retention: keeps the newest 3 upgrade backups (the new one and 2 older)' 3 "$(cnt "$OLD/backups" "agora-$NAME-before-*")"
 check 'retention: the two oldest are gone' "no|no" "$(yes_if "[ -e '$OLD/backups/agora-$NAME-before-0.8.0-20260101T000000Z.agorabk' ]")|$(yes_if "[ -e '$OLD/backups/agora-$NAME-before-0.8.0-20260102T000000Z.agorabk' ]")"
 check 'retention: the newer old ones stay' "yes|yes" "$(yes_if "[ -e '$OLD/backups/agora-$NAME-before-0.8.0-20260103T000000Z.agorabk' ]")|$(yes_if "[ -e '$OLD/backups/agora-$NAME-before-0.8.0-20260104T000000Z.agorabk' ]")"
 check 'retention: a bundle made with the backup command is never removed' yes "$(yes_if "[ -e '$OLD/backups/agora-$NAME-20260101T000000Z.agorabk' ]")"
@@ -181,17 +182,17 @@ check 'retention: and what it freed' yes "$(yes_if "grep -q 'of old upgrade back
 fresh
 for d in 01 02 03; do mkbk "$OLD/backups" "agora-$NAME-before-0.8.0-202601${d}T000000Z.agorabk"; done
 up --keep-backups 1
-check '--keep-backups 1: only the new upgrade backup is left' 1 "$(ls "$OLD/backups" | grep -c "^agora-$NAME-before-")"
+check '--keep-backups 1: only the new upgrade backup is left' 1 "$(cnt "$OLD/backups" "agora-$NAME-before-*")"
 check '--keep-backups: remembered in .env.prod' 1 "$(grep -c '^AGORA_KEEP_BACKUPS=1$' "$OLD/.env.prod")"
 fresh
 for d in 01 02 03; do mkbk "$OLD/backups" "agora-$NAME-before-0.8.0-202601${d}T000000Z.agorabk"; done
 echo 'AGORA_KEEP_BACKUPS=2' >> "$OLD/.env.prod"
 up
-check 'a remembered setting is used by a later upgrade (2: the new one and one old)' 2 "$(ls "$OLD/backups" | grep -c "^agora-$NAME-before-")"
+check 'a remembered setting is used by a later upgrade (2: the new one and one old)' 2 "$(cnt "$OLD/backups" "agora-$NAME-before-*")"
 fresh
 for d in 01 02 03 04; do mkbk "$OLD/backups" "agora-$NAME-before-0.8.0-202601${d}T000000Z.agorabk"; done
 up --keep-backups 0
-check '--keep-backups 0: keeps all of them' 5 "$(ls "$OLD/backups" | grep -c "^agora-$NAME-before-")"
+check '--keep-backups 0: keeps all of them' 5 "$(cnt "$OLD/backups" "agora-$NAME-before-*")"
 fresh; up --keep-backups x
 check '--keep-backups with a non-number: refused' 2 "$code"
 
@@ -199,7 +200,7 @@ check '--keep-backups with a non-number: refused' 2 "$code"
 fresh
 for d in 01 02 03 04; do mkbk "$T/outside6" "agora-$NAME-before-0.8.0-202601${d}T000000Z.agorabk"; done
 up --copy-backup-to "$T/outside6" --keep-backups 2
-check 'retention applies to the copy outside, keeping the new one' 2 "$(ls "$T/outside6" | grep -c "^agora-$NAME-before-")"
+check 'retention applies to the copy outside, keeping the new one' 2 "$(cnt "$T/outside6" "agora-$NAME-before-*")"
 
 # a failed upgrade deletes nothing
 fresh
@@ -207,7 +208,7 @@ for d in 01 02 03 04; do mkbk "$OLD/backups" "agora-$NAME-before-0.8.0-202601${d
 echo 'compose .* up -d' > "$FAKE/fail"
 up --keep-backups 1
 check 'a failed upgrade: fails' yes "$(yes_if '[ "$code" != 0 ]')"
-check 'a failed upgrade: every old backup is still there, and the new one' 5 "$(ls "$OLD/backups" | grep -c "^agora-$NAME-before-")"
+check 'a failed upgrade: every old backup is still there, and the new one' 5 "$(cnt "$OLD/backups" "agora-$NAME-before-*")"
 check 'a failed upgrade: the setting is not stored either' 0 "$(grep -c '^AGORA_KEEP_BACKUPS=' "$OLD/.env.prod" || true)"
 check 'a failed upgrade: no image removed' 0 "$(grep -c 'image rm' "$FAKE/log" || true)"
 : > "$FAKE/fail"
