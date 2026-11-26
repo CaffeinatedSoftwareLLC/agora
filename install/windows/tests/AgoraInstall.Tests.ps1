@@ -161,6 +161,41 @@ Describe 'fresh machine (WSL installed, no distro)' {
     }
 }
 
+Describe 'the backup of an upgrade leaves the distro' {
+    BeforeEach { New-Fake -Distros @((D 'Agora' 'Running' -Default)) -Engines @('Agora'); Set-Mocks }
+
+    It 'asks the Linux installer to copy it to %USERPROFILE%\Agora Backups on Windows (a distro that will not start takes its own copy along)' {
+        $r = Invoke-AgoraInstall -Options (Opt @{ Existing = 'upgrade' })
+        $r.Status | Should -Be 'done'
+        $global:AgoraFake.LinuxArgs | Should -Contain '--copy-backup-to'
+        $global:AgoraFake.LinuxArgs[[array]::IndexOf($global:AgoraFake.LinuxArgs, '--copy-backup-to') + 1] | Should -Be '/mnt/c/agora'
+        @($global:AgoraFake.Calls | Where-Object { $_ -like '*wslpath*' -and $_ -like '*Agora Backups' }).Count | Should -BeGreaterThan 0
+        ($global:AgoraFake.LinuxArgs -join ' ') | Should -BeLike '*--existing upgrade*'
+    }
+
+    It 'takes the folder from -BackupDir, and passes the number of backups to keep' {
+        $r = Invoke-AgoraInstall -Options (Opt @{ Existing = 'upgrade'; BackupDir = 'D:\Safe Place'; KeepBackups = 2 })
+        $r.Status | Should -Be 'done'
+        @($global:AgoraFake.Calls | Where-Object { $_ -like '*wslpath*' -and $_ -like '*D:\Safe Place' }).Count | Should -BeGreaterThan 0
+        ($global:AgoraFake.LinuxArgs -join ' ') | Should -BeLike '*--copy-backup-to /mnt/c/agora*--keep-backups 2*'
+    }
+
+    It 'asks for no copy when the user chose to install alongside or to stop' {
+        $null = Invoke-AgoraInstall -Options (Opt @{ Existing = 'alongside' })
+        $global:AgoraFake.LinuxArgs | Should -Not -Contain '--copy-backup-to'
+    }
+
+    It 'builds the Linux installer arguments with the folder only when there is one' {
+        InModuleScope AgoraInstall {
+            $o = @{ Telemetry = 'off'; NonInteractive = $true }
+            $p = [pscustomobject]@{ Http = 80; Https = 443; Api = 3000 }
+            (Get-LinuxInstallerArgs -Options $o -Ports $p -SourceWsl '/mnt/c/a') | Should -Not -Contain '--copy-backup-to'
+            $a = Get-LinuxInstallerArgs -Options $o -Ports $p -SourceWsl '/mnt/c/a' -BackupDirWsl '/mnt/c/Users/x/Agora Backups'
+            $a[[array]::IndexOf($a, '--copy-backup-to') + 1] | Should -Be '/mnt/c/Users/x/Agora Backups'
+        }
+    }
+}
+
 Describe 'WSL missing' {
     BeforeEach { New-Fake -Wsl $false; Set-Mocks }
 

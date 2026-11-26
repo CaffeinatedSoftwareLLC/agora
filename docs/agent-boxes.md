@@ -339,6 +339,8 @@ The owner presses **Log in** on the box in Settings → Agents (or on the box's 
 
 Rollback: the previous image tag stays on the engine until the next upgrade; `install/upgrade.sh --rollback` restores the previous release and its backup.
 
+**The upgrade's backup must not stay only inside the VM or distro** the install runs in (a Lima VM on a Mac, a WSL distro on Windows): a VM that stops booting takes it along. Before the release is replaced, the backup is copied to the host (`~/Agora Backups/`, `%USERPROFILE%\Agora Backups`) and checked by size and SHA-256; a failed copy stops the upgrade with nothing changed. The upgrade also checks free space first, keeps the newest 3 upgrade backups per place and, after a good upgrade only, removes Docker's build cache and unused box images. See [installing.md](installing.md#where-an-upgrades-backup-goes).
+
 ### 9.2 Rebuild
 
 Recreates the container from the image and the row, rotates both tokens. The fix for a box in a bad state that still has a good home folder.

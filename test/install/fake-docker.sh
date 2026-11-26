@@ -23,6 +23,8 @@
 #   config_files    what `ps` prints for the com.docker.compose.project.config_files label: one
 #                   line per container, the comma-separated compose files it was started with
 #   up_files        the -f files of the last `compose up` (one per line)
+#   image_list      what `image ls` prints (repository:tag per line); `image rm` removes a line;
+#                   used_images  what `ps -a --format {{.Image}}` prints
 # boxd, while in `running`, recreates a box container that is removed (its reconcile loop); a
 # network can't be removed while box-edge runs; a volume can't be removed while a container of
 # the same box exists. `compose build` refuses when box/VERSION and AGORA_BOX_VERSION differ, as
@@ -80,7 +82,15 @@ set -- "$@"
 case "$1" in
     info) [ $# -eq 1 ] && exit 0; echo 'Ubuntu 24.04 LTS'; exit 0 ;;
     version) echo 29.0.0; exit 0 ;;
-    image) [ "$2" = inspect ] && { has images "$3"; exit $?; } ;;
+    image)
+        case "$2" in
+            inspect) has images "$3"; exit $? ;;
+            ls) cat "$F/image_list" 2>/dev/null; exit 0 ;;
+            rm) del image_list "$3"; exit 0 ;;
+            prune) echo 'Total reclaimed space: 1.5GB'; exit 0 ;;
+        esac ;;
+    builder) printf 'Total:	2.5GB
+'; exit 0 ;;
     build)
         # build -q -t TAG -f FILE CONTEXT
         while [ $# -gt 0 ]; do [ "$1" = -t ] && tag=$2; shift; done
@@ -88,6 +98,7 @@ case "$1" in
     ps)
         case "$args" in
             *config_files*) cat "$F/config_files" 2>/dev/null; exit 0 ;;
+            *'{{.Image}}'*) cat "$F/used_images" 2>/dev/null; exit 0 ;;
             *com.docker.compose.service=api*) cat "$F/projects"; exit 0 ;;
             *label=com.docker.compose.project=*working_dir*)
                 p=$(printf '%s' "$args" | sed -n 's/.*com.docker.compose.project=\([^ ]*\).*/\1/p')

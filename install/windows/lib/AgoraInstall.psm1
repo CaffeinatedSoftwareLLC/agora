@@ -577,7 +577,7 @@ function Get-FreePorts {
 }
 
 function Get-LinuxInstallerArgs {
-    param([hashtable]$Options, $Ports, [string]$SourceWsl)
+    param([hashtable]$Options, $Ports, [string]$SourceWsl, [string]$BackupDirWsl = '')
     $a = @('--wsl', '--source', $SourceWsl, '--http-port', "$($Ports.Http)", '--https-port', "$($Ports.Https)", '--api-port', "$($Ports.Api)", '--telemetry', $Options.Telemetry)
     foreach ($k in 'Instance', 'Agent', 'AdminUser', 'Existing') {
         if ($Options.ContainsKey($k) -and $Options[$k]) {
@@ -585,6 +585,11 @@ function Get-LinuxInstallerArgs {
             $a += @($flag, [string]$Options[$k])
         }
     }
+    # An upgrade's backup is copied out of the distro to this folder on Windows, and checked, before
+    # anything changes (the Linux installer passes it to install/upgrade.sh); a distro that won't
+    # start takes everything inside it along
+    if ($BackupDirWsl) { $a += @('--copy-backup-to', $BackupDirWsl) }
+    if ($Options.ContainsKey('KeepBackups') -and $Options.KeepBackups -ne $null -and "$($Options.KeepBackups)" -ne '') { $a += @('--keep-backups', "$($Options.KeepBackups)") }
     if ($Options.ContainsKey('NonInteractive') -and $Options.NonInteractive) { $a += '--non-interactive' }
     return , $a
 }
@@ -803,7 +808,13 @@ function Invoke-AgoraInstall {
         Write-Step $step "Running the Linux installer inside '$distro'"
         $ports = Get-FreePorts
         $src = ConvertTo-WslPath -Distro $distro -WindowsPath $Options.SourceDir
-        $linuxArgs = Get-LinuxInstallerArgs -Options $Options -Ports $ports -SourceWsl $src
+        $backupWsl = ''
+        if ($Options.Existing -ne 'alongside' -and $Options.Existing -ne 'stop') {
+            $backupWin = if ($Options.ContainsKey('BackupDir') -and $Options.BackupDir) { $Options.BackupDir } else { Join-Path $env:USERPROFILE 'Agora Backups' }
+            $backupWsl = ConvertTo-WslPath -Distro $distro -WindowsPath $backupWin
+            Write-Ok "if this is an upgrade, its backup is also copied to $backupWin (on Windows, outside '$distro')"
+        }
+        $linuxArgs = Get-LinuxInstallerArgs -Options $Options -Ports $ports -SourceWsl $src -BackupDirWsl $backupWsl
         $linuxRan = $true
         $code = Invoke-LinuxInstaller -Distro $distro -AsRoot $asRoot -Arguments $linuxArgs -SourceWsl $src
         if ($code -ne 0) { throw "the Linux installer failed (exit $code); its message above names the step" }

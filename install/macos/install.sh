@@ -247,6 +247,19 @@ if [ -n "$STATUS" ]; then
         say "  Stopped; Agora in $VM was not changed. To upgrade it: --existing upgrade. Status: bash $HERE/agora-vm.sh status"
         exit 0
     fi
+    # An upgrade's backup has to leave the VM before anything changes, and only the Mac side can
+    # copy it out: agora-vm.sh upgrade does that, then the VM's own upgrade.sh
+    if [ "$EXISTING" = upgrade ] && [ "$(state_get "$VM" installed)" = 1 ]; then
+        step mac.upgrade "Upgrading Agora in $VM (backup copied to this Mac first)"
+        up=(upgrade --vm "$VM" --source "$SOURCE")
+        [ "$NON_INTERACTIVE" = 0 ] || up+=(--non-interactive)
+        [ -z "$PASS_FILE_ARG" ] || up+=(--passphrase-file "$PASS_FILE_ARG")
+        rc=0
+        bash "$HERE/agora-vm.sh" "${up[@]}" || rc=$?
+        [ "$rc" = 0 ] || die "the upgrade did not finish (exit $rc); the lines above say at which step"
+        FINISHED=1
+        exit 0
+    fi
 else
     # Ports on the Mac, clear of every other Agora VM's (running or not) and of what listens now
     taken=''
@@ -340,7 +353,8 @@ fi
 CLEANUP_CMDS=()
 # Docker came with the Linux installer: apply the firewall to its containers now, not at the next
 # boot (Docker's drop-in does it on every later start). A failure here is the doctor's to report.
-vm_sh "$VM" sudo -n systemctl restart agora-host-firewall >/dev/null 2>&1 || warn "couldn't re-apply the VM's firewall (bash $HERE/agora-vm.sh doctor shows whether it is in place)"
+if ! fw_out=$(vm_sh "$VM" sudo -n systemctl restart agora-host-firewall 2>&1); then warn "couldn't re-apply the VM's firewall: $(printf '%s' "$fw_out" | tail -n 3 | tr '
+' ' ') (bash $HERE/agora-vm.sh doctor shows whether it is in place)"; fi
 GDIR=$(guest_install_dirs "$VM" | head -n 1)
 state_set "$VM" installed 1
 [ -z "$GDIR" ] || state_set "$VM" install_dir "$GDIR"

@@ -151,8 +151,41 @@ vm_start_hint() {
 }
 
 # vm_copy_in <name> <mac file> <guest path>
-vm_copy_in() { limactl copy "$2" "$1:$3"; }
-vm_copy_out() { limactl copy "$1:$2" "$3"; }
+# vm_copy_out <name> <guest path> <mac file>
+# limactl's own message is kept: on a failure it is printed (indented, on stderr) and the status is
+# limactl's, so the caller's "copying ... failed" is never the only thing the user sees.
+vm_copy() { # vm_copy <from> <to>
+    local out rc=0
+    out=$(limactl copy "$1" "$2" 2>&1) || rc=$?
+    if [ "$rc" != 0 ]; then
+        warn "limactl copy $1 $2 failed (exit $rc):"
+        printf '%s\n' "$out" | sed 's/^/      /' >&2
+        [ -n "$out" ] || printf '      (limactl printed nothing; look at ~/.lima/%s/ha.stderr.log and try: limactl shell %s true)\n' "${VM:-<vm>}" "${VM:-<vm>}" >&2
+    fi
+    return "$rc"
+}
+vm_copy_in() { vm_copy "$2" "$1:$3"; }
+vm_copy_out() { vm_copy "$1:$2" "$3"; }
+
+# mac_sha256 <file>
+mac_sha256() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'; else sha256sum "$1" | awk '{print $1}'; fi; }
+
+# fetch_bundle_verified <vm> <guest file> <mac file>: copies a file out of the VM and checks the
+# copy's size and SHA-256 against the original, in the VM. Removes the copy and fails on any
+# difference, saying which.
+fetch_bundle_verified() {
+    local vm=$1 gfile=$2 out=$3 gsize gsha msize msha part
+    gsize=$(vm_sh "$vm" wc -c "$gfile" | awk '{print $1}') || { warn "can't read the size of $vm:$gfile"; return 1; }
+    gsha=$(vm_sh "$vm" sha256sum "$gfile" | awk '{print $1}') || { warn "can't read the SHA-256 of $vm:$gfile"; return 1; }
+    part="$out.part"
+    rm -f "$part"
+    (umask 077; vm_copy_out "$vm" "$gfile" "$part") || { rm -f "$part"; return 1; }
+    msize=$(wc -c < "$part" | tr -d ' '); msha=$(mac_sha256 "$part")
+    if [ "$msize" != "$gsize" ]; then rm -f "$part"; warn "the copy is $msize bytes, the backup in $vm is $gsize bytes"; return 1; fi
+    if [ "$msha" != "$gsha" ]; then rm -f "$part"; warn "the copy's SHA-256 ($msha) differs from the backup's in $vm ($gsha)"; return 1; fi
+    chmod 600 "$part"
+    mv "$part" "$out" || { rm -f "$part"; return 1; }
+}
 
 # ─── Ports on the Mac (127.0.0.1; macOS lets a normal user bind a port below 1024 only on 0.0.0.0) ───
 
@@ -406,7 +439,7 @@ copy_source_in() {
     tmp=$(mktemp -d)
     source_tarball "$src" "$tmp/src.tgz" || { rm -rf "$tmp"; return 1; }
     gdir=$(vm_sh "$vm" mktemp -d /tmp/agora-src.XXXXXX | tr -d '\r') || { rm -rf "$tmp"; return 1; }
-    vm_copy_in "$vm" "$tmp/src.tgz" "$gdir.tgz" >/dev/null || { rm -rf "$tmp"; return 1; }
+    vm_copy_in "$vm" "$tmp/src.tgz" "$gdir.tgz" || { rm -rf "$tmp"; return 1; }
     rm -rf "$tmp"
     vm_sh "$vm" tar --warning=no-unknown-keyword -xzf "$gdir.tgz" -C "$gdir" || return 1
     vm_sh "$vm" rm -f "$gdir.tgz"
@@ -429,12 +462,54 @@ guest_cleanup() {
 copy_secret_in() {
     local g
     g="$2/$(basename "$3")"
-    vm_copy_in "$1" "$3" "$g" >/dev/null || return 1
+    vm_copy_in "$1" "$3" "$g" || return 1
     vm_sh "$1" chmod 600 "$g"
     printf '%s' "$g"
 }
 
 # guest_install_dirs <vm>: the folder of every Agora install in the VM (Compose's record on api)
 guest_install_dirs() {
-    vm_sh "$1" sh -c 'f="{{.Label \"com.docker.compose.project.working_dir\"}}"; if docker info >/dev/null 2>&1; then docker ps -a --filter label=com.docker.compose.service=api --format "$f"; else sudo -n docker ps -a --filter label=com.docker.compose.service=api --format "$f"; fi 2>/dev/null | sed "/^\$/d" | sort -u' | tr -d '\r'
+    vm_sh "$1" sh -c 'f="{{.Label \"com.docker.compose.project.working_dir\"}}"; if docker info >/dev/null 2>&1; then docker ps -a --filter label=com.docker.compose.service=api --format "$f"; else sudo -n docker ps -a --filter label=com.docker.compose.service=api --format "$f"; fi | sed "/^\$/d" | sort -u' | tr -d '\r'
+}
+
+# ─── A VM that doesn't start ───
+
+# vm_ssh_log_hits <vm>: the lines of Lima's host-agent log that say the VM is not accepting SSH
+# (waiting for port 22, connection refused), newest last, at most 3
+vm_ssh_log_hits() {
+    local log="$HOME/.lima/$1/ha.stderr.log"
+    [ -r "$log" ] || return 0
+    tail -n 200 "$log" | grep -Ei 'waiting for port to become available on [0-9.]+:22|waiting for port 22|port 22|connection refused|essential requirement.*ssh|ssh.*(timed out|refused)' | tail -n 3 || true
+}
+
+# vm_wont_start_report <vm> <backup folder>: what to tell someone whose VM is not running, or
+# runs but does not answer. Read-only: it changes and deletes nothing.
+vm_wont_start_report() {
+    local vm=$1 bdir=$2 hits f d="$HOME/.lima/$1"
+    say ''
+    say "${BOLD}The VM $vm is not answering${RESET}"
+    hits=$(vm_ssh_log_hits "$vm")
+    if [ -n "$hits" ]; then
+        say "  Lima's log ($d/ha.stderr.log) says it is waiting for the VM's SSH (port 22: Waiting for port to become available on <ip>:22, repeated) or is refused:"
+        printf '%s\n' "$hits" | sed 's/^/      /'
+    fi
+    say "  The VM's disk files are still on this Mac and still hold Agora's data. Nothing here deletes them."
+    for f in disk diffdisk basedisk; do
+        [ -e "$d/$f" ] && say "      $d/$f ($(ls -lh "$d/$f" | awk '{print $5}'))"
+    done
+    say "  Do NOT run limactl delete, limactl prune or uninstall.sh --delete-vm for this VM until you have a backup you can restore: they remove those files."
+    say "  Backups on this Mac in $bdir:"
+    if [ -d "$bdir" ] && ls "$bdir"/*.agorabk >/dev/null 2>&1; then
+        ls -lt "$bdir"/*.agorabk | awk '{ $1=$2=$3=$4=""; sub(/^ +/, ""); print "      " $0 }'
+    else
+        say "      none. An upgrade's backup used to stay inside the VM only (fixed in this release); if the VM can't be started there is none to reach."
+    fi
+    say "  What Lima's documentation supports (what to try, in this order):"
+    say "      1. Free space on this Mac if it is nearly full ($(mac_free_gb "$HOME") GB free now); a full disk stops a VM from booting."
+    say "      2. limactl stop --force $vm   then   limactl start $vm   (stops the stuck VM process, starts it again)"
+    say "      3. Read why it hangs: $d/ha.stderr.log (the host agent) and the serial logs in $d/ (serial*.log)."
+    say "         For more detail: limactl stop --force $vm; limactl start --log-level debug $vm"
+    say "      4. If it still won't boot, install Agora again in a new VM (bash $(dirname "$MACOS_LIB_DIR")/install.sh --vm <new name>) and restore the newest backup above:"
+    say "         bash $(dirname "$MACOS_LIB_DIR")/agora-vm.sh restore <file> --vm <new name>"
+    say "  Not tested: getting the data out of the disk files of a VM that never boots. This repository has no procedure for it and Lima's documentation gives none; don't improvise on the only copy."
 }

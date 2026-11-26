@@ -57,7 +57,7 @@ bash install/uninstall.sh                        # remove the containers, keep t
 
 ```bash
 cd ~/.agora/macos/release
-bash install/macos/agora-vm.sh upgrade
+bash install/macos/agora-vm.sh upgrade           # checks room, backs up, copies the backup to ~/Agora Backups first
 bash install/macos/agora-vm.sh backup            # the file lands in ~/Agora Backups/
 bash install/macos/agora-vm.sh restore ~/Agora\ Backups/<file>.agorabk
 bash install/macos/agora-vm.sh tailnet on
@@ -69,7 +69,7 @@ bash install/macos/agora-vm.sh shell             # a shell inside the VM
 **Windows** (PowerShell; `Agora` is the WSL distro the installer made)
 
 ```powershell
-wsl -d Agora --cd ~/agora --exec bash install/upgrade.sh
+wsl -d Agora --cd ~/agora --exec bash install/upgrade.sh    # also copies the backup to %USERPROFILE%\Agora Backups
 wsl -d Agora --cd ~/agora --exec bash install/backup.sh
 wsl -d Agora --cd ~/agora --exec bash install/restore.sh backups/<file>.agorabk
 wsl -d Agora --cd ~/agora --exec bash install/tailnet.sh on

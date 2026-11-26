@@ -4,28 +4,35 @@
 #
 #   curl -fsSLO https://github.com/CaffeinatedSoftwareLLC/agora/releases/download/agora-latest/upgrade-macos.sh
 #   bash upgrade-macos.sh [--vm NAME] [--passphrase-file FILE] [--ref TAG] [--yes]
+#                         [--keep-backups N] [--force] [--no-prune] [--backup-in-vm-only]
 #
 # For an install whose own install/macos/agora-vm.sh is too old to do this in one command (from
 # before `agora-vm.sh upgrade` downloaded the release itself). It:
 #   1. downloads agora.tar.gz and its SHA-256 from the release and refuses a mismatch;
 #   2. unpacks it in a temporary folder;
 #   3. runs that release's `install/macos/agora-vm.sh upgrade --source <that folder>`, which copies
-#      it into the VM and runs its install/upgrade.sh there: a backup first (it asks for a
-#      passphrase unless you pass --passphrase-file), then the new release, keeping the compose
-#      override the install runs with (Tailscale access), then checks;
+#      it into the VM and runs its install/upgrade.sh there: room is checked, then a backup (it
+#      asks for a passphrase unless you pass --passphrase-file) that is copied to ~/Agora Backups
+#      on this Mac and checked before anything changes, then the new release, keeping the compose
+#      override the install runs with (Tailscale access), then checks, then old upgrade backups
+#      beyond the newest 3 (--keep-backups N) and Docker's leftovers are removed (--no-prune: not);
 #   4. keeps the new release's Mac commands in ~/.agora/macos/release and removes the temporary
 #      folder. On failure it prints the command that goes back.
 # Written for /bin/bash 3.2 (macOS's own).
 set -euo pipefail
 
-VM=agora PASS_FILE='' REF=latest YES=0
+VM=agora PASS_FILE='' REF=latest YES=0 KEEP='' FORCE=0 NO_PRUNE=0 VM_ONLY=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --vm) VM=${2:?--vm needs a name}; shift ;;
         --passphrase-file) PASS_FILE=${2:?--passphrase-file needs a file}; shift ;;
         --ref) REF=${2:?--ref needs a release tag}; shift ;;
         --yes) YES=1 ;;
-        -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+        --keep-backups) KEEP=${2:?--keep-backups needs a number}; shift ;;
+        --force) FORCE=1 ;;
+        --no-prune) NO_PRUNE=1 ;;
+        --backup-in-vm-only) VM_ONLY=1 ;;
+        -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
         *) echo "upgrade-macos.sh: unknown option $1" >&2; exit 2 ;;
     esac
     shift
@@ -47,7 +54,8 @@ cat <<EOF
 This upgrades the Agora install in the Lima VM "$VM" to the $([ "$REF" = latest ] && echo 'latest release' || echo "release $REF"):
 
   1. download the release from $url and check its SHA-256
-  2. back up the running install inside the VM (encrypted; you choose or give its passphrase)
+  2. check there is room, back up the running install (encrypted; you choose or give its
+     passphrase) and copy the backup to ~/Agora Backups on this Mac, checked, before changing anything
   3. replace the release, keeping your settings, data, boxes and Tailscale access
   4. start it and check that it answers
 
@@ -81,6 +89,10 @@ install_dir=$(/bin/bash "$vm_tool" status --vm "$VM" 2>/dev/null | sed -n 's/^In
 
 args=(upgrade --source "$tmp/release" --vm "$VM")
 [ -z "$PASS_FILE" ] || args+=(--passphrase-file "$PASS_FILE")
+[ -z "$KEEP" ] || args+=(--keep-backups "$KEEP")
+[ "$FORCE" = 0 ] || args+=(--force)
+[ "$NO_PRUNE" = 0 ] || args+=(--no-prune)
+[ "$VM_ONLY" = 0 ] || args+=(--backup-in-vm-only)
 rc=0
 /bin/bash "$vm_tool" "${args[@]}" || rc=$?
 if [ "$rc" != 0 ]; then

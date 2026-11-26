@@ -82,7 +82,21 @@ Agents on the Mac connect to `http://localhost:3000`, which goes straight to the
 bash install/macos/agora-vm.sh upgrade
 ```
 
-That is the whole upgrade. It downloads the latest release (`agora.tar.gz` from the fixed `agora-latest` release) to the Mac, checks its SHA-256, copies it into the VM and runs its `install/upgrade.sh` there: a backup first (it asks for a passphrase; `--passphrase-file <file>` gives one), then the new release, started with the compose override files the install was running with, so **Tailscale access survives the upgrade**. It ends with one line per check: Agora's health inside the VM, Tailscale's `serve` when Tailscale access is on, and Agora's health through the Mac's port forward. A failed check says what to run and never undoes the upgrade.
+That is the whole upgrade. It downloads the latest release (`agora.tar.gz` from the fixed `agora-latest` release) to the Mac, checks its SHA-256, copies it into the VM and then:
+
+1. **checks there is room**, in the VM and on the Mac (the backup's copy, and the VM's disk file, which only grows), before anything starts. It refuses with the folder, the free space and the need; `--force` goes on anyway;
+2. **takes the backup and copies it out to `~/Agora Backups/`** (it asks for a passphrase; `--passphrase-file <file>` gives one), checking the copy's size and SHA-256 against the original in the VM. If the copy fails or doesn't match, the upgrade stops with nothing changed. A backup that stays only inside the VM is lost if the VM stops booting, which is what this prevents. `--backup-in-vm-only` is the explicit way to skip the copy;
+3. runs the VM's `install/upgrade.sh` with that backup, started with the compose override files the install was running with, so **Tailscale access survives the upgrade**. It ends with one line per check: Agora's health inside the VM, Tailscale's `serve` when Tailscale access is on, and Agora's health through the Mac's port forward. A failed check says what to run and never undoes the upgrade.
+
+After a good upgrade it keeps the newest 3 upgrade backups, in `~/Agora Backups/` and in the VM (`--keep-backups N`; `0` keeps all; remembered), and removes Docker's build cache and the box images no box uses any more (`--no-prune` skips that), printing what it freed. Backups you made with `agora-vm.sh backup` are never removed, and a failed upgrade removes nothing. The messages when something stops it:
+
+```
+not enough room in agora for the upgrade; nothing was changed (the lines above say where)
+  /Users/you/Agora Backups: 1.2 GB free, the upgrade needs about 9.0 GB here (...)
+the backup was taken, but it could not be copied to ~/Agora Backups/<file>, or the copy doesn't match, so the upgrade was stopped before it changed anything. The backup is still in agora at <path>.
+```
+
+The same goes for `bash install/macos/install.sh --existing upgrade`, which hands over to `agora-vm.sh upgrade`. Run inside the VM (`agora-vm.sh shell`), `install/upgrade.sh` refuses to take a backup that would stay in the VM, unless you pass `--backup-in-vm-only`.
 
 The downloaded release also becomes the Mac's copy of these commands, in `~/.agora/macos/release`, so `bash ~/.agora/macos/release/install/macos/agora-vm.sh ...` is always the installed release's. `--ref v0.5.0` installs that release instead of the latest; `--source <folder>` a checkout or an unpacked release (nothing is downloaded). To go back: `bash install/macos/agora-vm.sh shell bash install/upgrade.sh --rollback`.
 
@@ -94,6 +108,19 @@ bash upgrade-macos.sh
 ```
 
 It says what it is about to do and asks before starting, downloads and checks the latest release, runs that release's `agora-vm.sh upgrade` (which finds the tailnet override on the running containers and keeps it), leaves the new commands in `~/.agora/macos/release`, and prints the rollback command if anything fails. `--passphrase-file <file>` and `--vm <name>` are passed on; `--yes` skips the question.
+
+## The VM does not start
+
+If `agora-vm.sh doctor` says the VM is not running, or it runs but nothing answers, Lima's log (`~/.lima/<vm>/ha.stderr.log`) usually says it is waiting for the VM's SSH ("Waiting for port to become available on 192.168.5.15:22", repeated every few seconds; `ssh -F ~/.lima/<vm>/ssh.config lima-<vm>` says "Connection refused") or is refused. `doctor` then prints, and changes nothing:
+
+- the lines of that log that say so;
+- that the VM's disk files in `~/.lima/<vm>/` (on a Lima 2 VM with vz, a single file named `disk`, 100 GB logical; `diffdisk` and `basedisk` instead on older Lima) are still on the Mac and still hold Agora's data, and not to run `limactl delete`, `limactl prune` or `uninstall.sh --delete-vm` until you have a backup you can restore (they remove those files);
+- the backups in `~/Agora Backups/`, newest first, with their dates (an upgrade's backup is there since this fix; before it, upgrade backups were kept inside the VM only and are unreachable when it does not boot);
+- what Lima's documentation supports: free space on the Mac if it is nearly full; `limactl stop --force <vm>` then `limactl start <vm>`; reading `ha.stderr.log` and the serial logs (`serial*.log`) in the VM's folder; `limactl start --log-level debug <vm>` for more detail.
+
+If it still won't start, install Agora again in a new VM (`bash install/macos/install.sh --vm <new name>`) and restore the newest backup with `agora-vm.sh restore <file> --vm <new name>`.
+
+**Not tested, and not described:** getting data out of the disk files of a VM that never boots. Neither this repository nor Lima's documentation gives a procedure for it; don't improvise on the only copy. The doctor's output for a stuck VM was checked with Lima stubbed, not against a VM that really hangs on SSH.
 
 ## Host-mode agents on the Mac
 
@@ -121,7 +148,7 @@ The VM's disks (`~/.lima/agora/`) hold the install's `.env.prod`, with its encry
 
 ## Disk space
 
-The VM's disk is a file that grows as the VM fills it, up to its size (100 GiB by default), and never shrinks by itself. When the Mac's disk is full, the VM stops, and Agora with it. `agora-vm.sh doctor` fails below 10 GB free, and the keep-alive writes a line to `~/.agora/macos/agora-keepalive.log` once a day while it is that low. To free space inside the VM: `bash install/macos/agora-vm.sh shell`, then `sudo docker system prune` (old images and build cache).
+The VM's disk is a file that grows as the VM fills it, up to its size (100 GiB by default), and never shrinks by itself. When the Mac's disk is full, the VM stops, and Agora with it. `agora-vm.sh doctor` fails below 10 GB free, and the keep-alive writes a line to `~/.agora/macos/agora-keepalive.log` once a day while it is that low. Each upgrade needs room for the backup in the VM, a copy of it on the Mac, and the new images (about 6 GB, the build cache and a new box image); the upgrade checks this before it starts, and removes the build cache and unused box images after a good one. To free space inside the VM by hand: `bash install/macos/agora-vm.sh shell`, then `sudo docker system prune` (old images and build cache). The VM's disk file does not shrink after that; the room it needs on the Mac is only given back by removing the VM.
 
 ## Reaching it from your phone (Tailscale)
 

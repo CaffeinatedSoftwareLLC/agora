@@ -98,10 +98,22 @@ In Agora, Admin → Instance → **Report setup problem** does the same from the
 
 Each one downloads the latest release (`agora.tar.gz` from the fixed `agora-latest` release), checks its SHA-256 and hands over to that release's own `install/upgrade.sh`, which:
 
-1. backs up the running install first (it asks for a passphrase; `--passphrase-file <file>` gives one);
+0. checks there is room first: it estimates the backup (the size of your last one) and the new images, and checks free space where each lands (inside the VM or WSL distro, and on the machine for the copy of the backup). It refuses to start, naming the folder, the free space and the need, and what to remove (old backups, `docker builder prune`, old box images); `--force` goes on anyway;
+1. backs up the running install first (it asks for a passphrase; `--passphrase-file <file>` gives one) **and gets the backup out of the VM or distro before anything changes**: see [Where an upgrade's backup goes](#where-an-upgrades-backup-goes);
 2. replaces the release and keeps the old one in `.releases/` for `--rollback`. Settings, data and boxes stay, and boxes keep their home folders;
 3. starts the stack **with the compose override files the install was running with**. An install with Tailscale access ([remote-access.md](remote-access.md)) comes back with `docker-compose.tailnet.yml`: the list is in `.agora-install` in the install folder (`compose_overrides=`), and an install that was started by hand is read once from its running containers;
-4. prints one line per check: Agora's health and, with Tailscale access on, that `tailscale serve` still publishes it. A failed check says what to run; it never undoes the upgrade.
+4. prints one line per check: Agora's health and, with Tailscale access on, that `tailscale serve` still publishes it. A failed check says what to run; it never undoes the upgrade;
+5. only after a good upgrade, cleans up: it removes upgrade backups beyond the newest 3 and Docker's leftovers (build cache, dangling images, box and maintenance images of versions no box uses; never an image a container uses, never a volume), and says what it freed. `--keep-backups N` changes the 3 (`0` keeps every backup; the number is remembered as `AGORA_KEEP_BACKUPS` in `.env.prod`), `--no-prune` leaves Docker alone. A failed upgrade deletes nothing. Backups you made with the backup command are never removed.
+
+### Where an upgrade's backup goes
+
+On a Mac Agora runs in a Lima VM and on Windows in a WSL distro. A backup written inside the VM or distro is lost with it: if the VM stops starting, every backup in it is unreachable. So an upgrade copies its backup out before it changes anything, and checks the copy's size and SHA-256 against the original. If the copy fails or doesn't match, the upgrade stops with nothing changed.
+
+| | The upgrade's backup |
+|---|---|
+| macOS | Copied to `~/Agora Backups/` on the Mac by `agora-vm.sh upgrade`. Without the copy the upgrade stops; `--backup-in-vm-only` is the explicit way to go on with the backup only in the VM. |
+| Windows | Copied to `%USERPROFILE%\Agora Backups` by `install.ps1 -Existing upgrade` (`-BackupDir <folder>` for another). The bare `wsl ... upgrade.sh` command finds the same folder through `/mnt/c` when it can, and otherwise says in capitals that the backup is only inside the distro, and that this is not safe. |
+| Linux | Stays in `<install>/backups/`, which is on the same disk as Agora; the summary says so. `--backup-dir <folder>` writes it to another disk, `--copy-backup-to <folder>` also copies it there, checked. |
 
 `--ref v0.5.0` installs that release instead of the latest, `--source <folder>` a checkout or an unpacked release. To go back: `bash ~/agora/install/upgrade.sh --rollback`.
 
@@ -119,7 +131,7 @@ All from the install folder (`~/agora`; on Windows inside the distro: `wsl -d Ag
 
 | | Command | |
 |---|---|---|
-| Back up | `bash install/backup.sh` | One encrypted file in `backups/` with the database, files, every agent's box (logins and repos) and `.env.prod`. You choose its passphrase; without it the backup can't be restored. Agora stops for the length of the backup. |
+| Back up | `bash install/backup.sh` | One encrypted file in `backups/` (on a Mac, `agora-vm.sh backup` copies it to `~/Agora Backups/` and checks the copy) with the database, files, every agent's box (logins and repos) and `.env.prod`. You choose its passphrase; without it the backup can't be restored. Agora stops for the length of the backup. |
 | Restore | `bash install/restore.sh backups/<file>.agorabk` | Into an install with the same name. Tokens and approvals from before the backup stop working; boxes are rebuilt with fresh ones. |
 | Tailscale access | `bash install/tailnet.sh on` (`off`, `status`) | Reach Agora from your phone over your own tailnet, in one command: [remote-access.md](remote-access.md). |
 | Remove | `bash install/uninstall.sh` | Removes the containers and keeps all data. `--purge` deletes the data too, after you type the install's name. On Windows, `install\windows\uninstall.ps1` also removes the scheduled task and, if the installer created it and you confirm, the `Agora` distro. |
