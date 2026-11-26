@@ -111,10 +111,10 @@ It says what it is about to do and asks before starting, downloads and checks th
 
 ## The VM does not start
 
-If `agora-vm.sh doctor` says the VM is not running, or it runs but nothing answers, Lima's log (`~/.lima/<vm>/ha.stderr.log`) usually says it is waiting for the VM's SSH ("waiting for port 22") or is refused. `doctor` then prints, and changes nothing:
+If `agora-vm.sh doctor` says the VM is not running, or it runs but nothing answers, Lima's log (`~/.lima/<vm>/ha.stderr.log`) usually says it is waiting for the VM's SSH ("Waiting for port to become available on 192.168.5.15:22", repeated every few seconds; `ssh -F ~/.lima/<vm>/ssh.config lima-<vm>` says "Connection refused") or is refused. `doctor` then prints, and changes nothing:
 
 - the lines of that log that say so;
-- that the VM's disk files in `~/.lima/<vm>/` (`diffdisk` and `basedisk` on a Lima 2 VM) are still on the Mac and still hold Agora's data, and not to run `limactl delete`, `limactl prune` or `uninstall.sh --delete-vm` until you have a backup you can restore (they remove those files);
+- that the VM's disk files in `~/.lima/<vm>/` (on a Lima 2 VM with vz, a single file named `disk`, 100 GB logical; `diffdisk` and `basedisk` instead on older Lima) are still on the Mac and still hold Agora's data, and not to run `limactl delete`, `limactl prune` or `uninstall.sh --delete-vm` until you have a backup you can restore (they remove those files);
 - the backups in `~/Agora Backups/`, newest first, with their dates (an upgrade's backup is there since this fix; before it, upgrade backups were kept inside the VM only and are unreachable when it does not boot);
 - what Lima's documentation supports: free space on the Mac if it is nearly full; `limactl stop --force <vm>` then `limactl start <vm>`; reading `ha.stderr.log` and the serial logs (`serial*.log`) in the VM's folder; `limactl start --log-level debug <vm>` for more detail.
 

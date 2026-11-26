@@ -450,12 +450,12 @@ FAKE_ENV=(); rm -rf "$BK"; run "$V" backup
 check_true 'backup: a matching copy is kept, readable by this user only' '[ "$RC" = 0 ] && grep -q "size and SHA-256 match" "$T/out" && only_me "$(ls "$BK"/*.agorabk | head -n 1)"'
 
 # a VM that does not start: doctor says what is still there and what is supported
-mkdir -p "$T/home/.lima/agora"; printf 'time="x" level=info msg="Waiting for port 22 to become available"\n' > "$T/home/.lima/agora/ha.stderr.log"
-head -c 2048 /dev/zero > "$T/home/.lima/agora/diffdisk"
+mkdir -p "$T/home/.lima/agora"; printf 'time="x" level=info msg="Waiting for port to become available on 192.168.5.15:22"\n' > "$T/home/.lima/agora/ha.stderr.log"
+head -c 2048 /dev/zero > "$T/home/.lima/agora/disk"
 sed -i.bak 's/^agora .*/agora Stopped/' "$T/lima/instances"
 FAKE_ENV=(FAKE_BUSY_PORTS='8443 3000'); run "$V" doctor
-check_true 'doctor, VM not running: says Lima is waiting for port 22 and quotes the log' '[ "$RC" = 1 ] && grep -q "The VM agora is not answering" "$T/out" && grep -q "Waiting for port 22" "$T/out"'
-check_true 'doctor, VM not running: the disk file still holds the data, and what not to run' 'grep -q "diffdisk" "$T/out" && grep -q "still hold Agora" "$T/out" && grep -q "Do NOT run limactl delete" "$T/out"'
+check_true 'doctor, VM not running: says Lima is waiting for port 22 and quotes the log' '[ "$RC" = 1 ] && grep -q "The VM agora is not answering" "$T/out" && grep -q "Waiting for port to become available on 192.168.5.15:22" "$T/out"'
+check_true 'doctor, VM not running: the disk file still holds the data, and what not to run' 'grep -q "/disk" "$T/out" && grep -q "still hold Agora" "$T/out" && grep -q "Do NOT run limactl delete" "$T/out"'
 check_true 'doctor, VM not running: lists the backups on the Mac with dates' 'grep -q "Backups on this Mac in $BK" "$T/out" && grep -q "agora-agora-.*agorabk" "$T/out"'
 check_true 'doctor, VM not running: the options Lima supports, and what is untested' 'grep -q "limactl stop --force agora" "$T/out" && grep -q "serial" "$T/out" && grep -q "Not tested" "$T/out"'
 rm -rf "$BK"; run "$V" doctor

@@ -479,7 +479,7 @@ guest_install_dirs() {
 vm_ssh_log_hits() {
     local log="$HOME/.lima/$1/ha.stderr.log"
     [ -r "$log" ] || return 0
-    tail -n 200 "$log" | grep -Ei 'waiting for port 22|port 22|connection refused|essential requirement.*ssh|ssh.*(timed out|refused)' | tail -n 3 || true
+    tail -n 200 "$log" | grep -Ei 'waiting for port to become available on [0-9.]+:22|waiting for port 22|port 22|connection refused|essential requirement.*ssh|ssh.*(timed out|refused)' | tail -n 3 || true
 }
 
 # vm_wont_start_report <vm> <backup folder>: what to tell someone whose VM is not running, or
@@ -490,11 +490,11 @@ vm_wont_start_report() {
     say "${BOLD}The VM $vm is not answering${RESET}"
     hits=$(vm_ssh_log_hits "$vm")
     if [ -n "$hits" ]; then
-        say "  Lima's log ($d/ha.stderr.log) says it is waiting for the VM's SSH (port 22) or is refused:"
+        say "  Lima's log ($d/ha.stderr.log) says it is waiting for the VM's SSH (port 22: Waiting for port to become available on <ip>:22, repeated) or is refused:"
         printf '%s\n' "$hits" | sed 's/^/      /'
     fi
     say "  The VM's disk files are still on this Mac and still hold Agora's data. Nothing here deletes them."
-    for f in diffdisk basedisk disk; do
+    for f in disk diffdisk basedisk; do
         [ -e "$d/$f" ] && say "      $d/$f ($(ls -lh "$d/$f" | awk '{print $5}'))"
     done
     say "  Do NOT run limactl delete, limactl prune or uninstall.sh --delete-vm for this VM until you have a backup you can restore: they remove those files."
