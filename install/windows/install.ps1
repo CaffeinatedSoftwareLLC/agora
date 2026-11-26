@@ -25,7 +25,11 @@ param(
     [string]$AdminUser = '',
     [ValidateSet('', 'upgrade', 'alongside', 'stop')][string]$Existing = '',
     # The Agora checkout or unpacked release to install (default: the one this script is in)
-    [string]$SourceDir = ''
+    [string]$SourceDir = '',
+    # Where an upgrade's backup is also copied, outside the WSL distro (default: %USERPROFILE%\Agora Backups)
+    [string]$BackupDir = '',
+    # Upgrade backups kept per location (default 3; 0 keeps all)
+    [ValidateRange(0, 99)][int]$KeepBackups = -1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,7 +54,9 @@ $options = @{
     ScriptPath = $PSCommandPath
     SourceDir = $SourceDir
     Version = $version
+    BackupDir = $BackupDir
 }
+if ($KeepBackups -ge 0) { $options.KeepBackups = $KeepBackups }
 $result = Invoke-AgoraInstall -Options $options
 switch ($result.Status) {
     'done' { exit 0 }

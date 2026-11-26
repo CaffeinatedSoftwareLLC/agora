@@ -32,6 +32,9 @@ Usage: install.sh [options]
   --existing upgrade|alongside|stop   what to do when this engine already has Agora
                              (default: ask; stop without a terminal)
   --passphrase-file F        backup passphrase, for --existing upgrade without a terminal
+  --copy-backup-to DIR       with --existing upgrade: also copy the upgrade's backup to DIR (the Windows
+                             installer passes %USERPROFILE%Agora Backups); --keep-backups N,
+                             --backup-in-vm-only: see install/upgrade.sh
   --wsl                      running inside WSL (the Windows installer passes this)
   --lima                     running inside the macOS installer's Lima VM (it passes this)
   --box-image-target box|test   test: the box image with fake CLIs (CI only)
@@ -48,6 +51,7 @@ ARGS=("$@")
 NON_INTERACTIVE=0 INSTANCE='' INSTALL_DIR='' SOURCE='' REF=latest DOMAIN=''
 HTTP_PORT='' HTTPS_PORT='' API_PORT='' ADMIN_USER='' ADMIN_EMAIL='' ADMIN_PW_FILE=''
 AGENT='' AGENT_NAME='' AGENT_KEY_FILE='' TELEMETRY_ARG='' EXISTING='' WSL=0 LIMA=0 PASS_FILE_ARG='' DOCKER_INSTALLED=0
+COPY_BACKUP_TO='' KEEP_BACKUPS='' BACKUP_VM_ONLY=0
 BOX_TARGET=box BOX_INSECURE=0 MIN_DISK_GB=${AGORA_MIN_DISK_GB:-20}
 need() { [ $# -ge 2 ] && [ -n "$2" ] || { echo "install.sh: $1 needs a value" >&2; exit 2; }; }
 while [ $# -gt 0 ]; do
@@ -70,6 +74,9 @@ while [ $# -gt 0 ]; do
         --telemetry) need "$@"; TELEMETRY_ARG=$2; shift ;;
         --existing) need "$@"; EXISTING=$2; shift ;;
         --passphrase-file) need "$@"; PASS_FILE_ARG=$2; shift ;;
+        --copy-backup-to) need "$@"; COPY_BACKUP_TO=$2; shift ;;
+        --keep-backups) need "$@"; KEEP_BACKUPS=$2; shift ;;
+        --backup-in-vm-only) BACKUP_VM_ONLY=1 ;;
         --wsl) WSL=1 ;;
         --lima) LIMA=1 ;;
         --box-image-target) need "$@"; BOX_TARGET=$2; shift ;;
@@ -215,6 +222,9 @@ if [ "${#found[@]}" -gt 0 ]; then
             up_args=(--dir "$tdir" --source "$SOURCE")
             [ "$NON_INTERACTIVE" = 0 ] || up_args+=(--non-interactive)
             [ -z "$PASS_FILE_ARG" ] || up_args+=(--passphrase-file "$PASS_FILE_ARG")
+            [ -z "$COPY_BACKUP_TO" ] || up_args+=(--copy-backup-to "$COPY_BACKUP_TO")
+            [ -z "$KEEP_BACKUPS" ] || up_args+=(--keep-backups "$KEEP_BACKUPS")
+            [ "$BACKUP_VM_ONLY" = 0 ] || up_args+=(--backup-in-vm-only)
             FINISHED=1
             exec bash "$HERE/../upgrade.sh" "${up_args[@]}"
             ;;

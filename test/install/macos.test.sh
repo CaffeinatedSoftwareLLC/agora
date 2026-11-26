@@ -56,7 +56,16 @@ case "\$1" in
     start) n=\$(eval echo "\\\${\$#}"); sed -i.bak "s/^\$n .*/\$n Running/" "\$L/instances" ;;
     stop) sed -i.bak "s/^\$2 .*/\$2 Stopped/" "\$L/instances" ;;
     delete) sed -i.bak "/^\$3 /d" "\$L/instances" ;;
-    copy) s=\${2#*:}; d=\${3#*:}; [ "\$2" = "\${2#*:}" ] || s=\${2#*:}; cp "\$s" "\$d" ;;
+    copy)
+        case "\$2" in *:*) dir=out ;; *) dir=in ;; esac
+        if [ "\${FAKE_COPY_FAIL:-}" = "\$dir" ]; then echo "scp: /tmp/x: No space left on device" >&2; exit 1; fi
+        s=\${2#*:}; d=\${3#*:}; [ "\$2" = "\${2#*:}" ] || s=\${2#*:}; cp "\$s" "\$d" || exit \$?
+        if [ "\$dir" = out ]; then
+            case "\${FAKE_COPY_CORRUPT:-}" in
+                size) printf x >> "\$d" ;;
+                sha) printf 'Z' | dd of="\$d" bs=1 count=1 conv=notrunc 2>/dev/null ;;
+            esac
+        fi ;;
     shell)
         shift; while [ "\${1#--}" != "\$1" ]; do [ "\$1" = --workdir ] && shift; shift; done; shift
         case "\$*" in
@@ -73,10 +82,20 @@ case "\$1" in
                 mkdir -p "\$HOME/.agora"; echo "https://localhost:\$(printf '%s\n' "\$@" | sed -n '/^--https-port$/{n;p;}')" > "\$HOME/.agora/last-install-url"
                 exit "\${FAKE_LINUX_EXIT:-0}" ;;
             *install/backup.sh*) out=\$(printf '%s\n' "\$@" | sed -n '/^--out$/{n;p;}'); mkdir -p "\$(dirname "\$out")"; echo bundle > "\$out"; exit 0 ;;
-            *install/upgrade.sh*) printf '%s\n' "\$@" > "$T/guest-script-args"; exit "\${FAKE_UPGRADE_EXIT:-0}" ;;
+            *install/upgrade.sh*)
+                printf '%s\n' "\$@" > "$T/guest-script-args"; printf '%s\n' "\$*" >> "$T/guest-upgrade-calls"
+                case "\$*" in
+                    *--check-space*) echo "AGORA_BACKUP_EST_KB=\${FAKE_EST_KB:-2048}"; exit "\${FAKE_SPACE_EXIT:-0}" ;;
+                    *--backup-only*)
+                        res=\$(printf '%s\n' "\$@" | sed -n '/^--backup-result-file\$/{n;p;}'); gd=\$(printf '%s\n' "\$@" | sed -n '/^--dir\$/{n;p;}')
+                        b="\$gd/backups/agora-agora-before-9.9.9-20261101T000000Z.agorabk"; mkdir -p "\$gd/backups"; head -c 4096 /dev/zero > "\$b"
+                        echo "bundle=\$b" > "\$res"; exit "\${FAKE_BACKUP_EXIT:-0}" ;;
+                esac
+                exit "\${FAKE_UPGRADE_EXIT:-0}" ;;
             "bash "*install/tailnet.sh*) printf '%s\n' "\$@" > "$T/guest-script-args"; exit "\${FAKE_TAILNET_EXIT:-0}" ;;
             *install/restore.sh*|*install/uninstall.sh*|*install/doctor.sh*) printf '%s\n' "\$@" > "$T/guest-script-args"; exit 0 ;;
         esac
+        if [ "\$1" = sha256sum ]; then shift; command -v sha256sum >/dev/null 2>&1 && exec sha256sum "\$@"; exec shasum -a 256 "\$@"; fi
         if [ "\$1" = tar ]; then shift; [ "\$1" = --warning=no-unknown-keyword ] && shift; exec $REAL_TAR "\$@"; fi
         exec "\$@" ;;
 esac
@@ -84,7 +103,7 @@ EOF
 chmod +x "$T/limactl.impl"
 
 reset() { # a fresh Mac: no Lima, no VM, empty home
-    rm -rf "${T:?}/home" "$T/lima" "$T/daemons" "$CALLS" "$T/linux-args" "$T/linux-saw-password" "$T/guest-script-args" "$BIN/limactl"
+    rm -rf "${T:?}/home" "$T/lima" "$T/daemons" "$CALLS" "$T/linux-args" "$T/linux-saw-password" "$T/guest-script-args" "$T/guest-upgrade-calls" "$BIN/limactl"
     rm -rf "$T/guest"; mkdir -p "$T/home" "$T/lima" "$T/daemons" "$T/guest/agora"; : > "$CALLS"
     echo AGORA_INSTANCE=agora > "$T/guest/agora/.env.prod"
 }
@@ -212,8 +231,7 @@ check_true 'second run without --existing: stops, the Linux installer never runs
 : > "$CALLS"; run "$I" --non-interactive --telemetry off --existing upgrade
 check 'second run --existing upgrade: exit 0' 0 "$RC"
 check 'second run: no limactl create' 0 "$(grep -c '^limactl create' "$CALLS")"
-check_true 'second run: the same ports, and --existing upgrade passed on' 'tr "
-" " " < "$T/linux-args" | grep -q -- "--https-port 8444 .*--existing upgrade"'
+check_true 'second run --existing upgrade: goes through agora-vm.sh upgrade, so the backup leaves the VM first' '[ ! -f "$T/linux-args" ] && grep -q -- "--backup-only" "$T/guest-upgrade-calls" && grep -q -- "--use-backup" "$T/guest-upgrade-calls" && [ -n "$(ls "$T/home/Agora Backups")" ]'
 
 # ─── A VM someone else made ───
 reset; with_lima; echo 'agora Running' > "$T/lima/instances"; run "$I" --non-interactive --telemetry off
@@ -364,6 +382,85 @@ check 'tailnet status: a failed check is this command.s exit code' 1 "$RC"
 FAKE_ENV=()
 run "$V" tailnet sideways
 check 'tailnet with another word: refused' 1 "$RC"
+
+# ─── agora-vm.sh upgrade: the backup leaves the VM before anything changes ───
+BK="$T/home/Agora Backups"
+# Does this file system keep a chmod 600 (not Git Bash on NTFS)? The mode checks below need it.
+: > "$T/modeprobe"; chmod 600 "$T/modeprobe"; if [ "$(ls -l "$T/modeprobe" | cut -c1-10)" = "-rw-------" ]; then MODES=1; else MODES=0; fi
+only_me() { [ "$MODES" = 0 ] || [ "$(ls -l "$1" | cut -c1-10)" = "-rw-------" ]; }
+NEWBK="agora-agora-before-9.9.9-20261101T000000Z.agorabk"
+up_reset() { rm -rf "$BK" "$T/guest/agora/backups"; rm -f "$T/guest-script-args" "$T/guest-upgrade-calls"; : > "$CALLS"; }
+call_n() { sed -n "$1p" "$T/guest-upgrade-calls" 2>/dev/null; }
+up_reset; FAKE_ENV=(TMPDIR="$T/tmp"); run "$V" upgrade --source "$T/relsrc/agora" --passphrase-file "$T/pp"
+check 'upgrade, backup out: exit 0' 0 "$RC"
+check_true 'upgrade, backup out: room checked first, then the backup, then the upgrade with that backup' 'call_n 1 | grep -q -- "--check-space" && call_n 2 | grep -q -- "--backup-only" && call_n 3 | grep -q -- "--use-backup $T/guest/agora/backups/$NEWBK"'
+check_true 'upgrade, backup out: the bundle is on the Mac, the same bytes, readable by this user only' 'cmp -s "$BK/$NEWBK" "$T/guest/agora/backups/$NEWBK" && only_me "$BK/$NEWBK"'
+l_copy=$(grep -n '^limactl copy agora:' "$CALLS" | tail -n 1 | cut -d: -f1); l_use=$(grep -n -- '--use-backup' "$CALLS" | head -n 1 | cut -d: -f1)
+check_true 'upgrade, backup out: copied to the Mac before the upgrade call (the build) runs' '[ -n "$l_copy" ] && [ -n "$l_use" ] && [ "$l_copy" -lt "$l_use" ]'
+check_true 'upgrade, backup out: says size and SHA-256 match, and where it is' 'grep -q "backup on this Mac: $BK/$NEWBK (size and SHA-256 match" "$T/out"'
+check_true 'upgrade, backup out: the passphrase file goes to the backup step too' 'call_n 2 | grep -q -- "--passphrase-file /tmp/agora-in."'
+
+up_reset; FAKE_ENV=(TMPDIR="$T/tmp" FAKE_COPY_FAIL=out); run "$V" upgrade --source "$T/relsrc/agora"
+check_true 'copy-out fails: the upgrade stops, nothing is replaced' '[ "$RC" = 1 ] && ! grep -q -- "--use-backup" "$CALLS" && [ "$(wc -l < "$T/guest-upgrade-calls" | tr -d " ")" = 2 ]'
+check_true 'copy-out fails: shows limactl'"'"'s own error' 'grep -q "No space left on device" "$T/out" && grep -q "limactl copy agora:" "$T/out"'
+check_true 'copy-out fails: says the backup is still in the VM and nothing was changed' 'grep -q "could not be copied to $BK/$NEWBK" "$T/out" && grep -q "still in agora at" "$T/out" && grep -q "Nothing was changed" "$T/out"'
+check 'copy-out fails: no partial file left on the Mac' '' "$(ls "$BK")"
+for mode in size sha; do
+    up_reset; FAKE_ENV=(TMPDIR="$T/tmp" FAKE_COPY_CORRUPT=$mode); run "$V" upgrade --source "$T/relsrc/agora"
+    check_true "copy-out, $mode mismatch: stops before the upgrade, no copy kept" '[ "$RC" = 1 ] && ! grep -q -- "--use-backup" "$CALLS" && [ -z "$(ls "$BK")" ]'
+done
+check_true 'copy-out, checksum mismatch: names both checksums' 'grep -q "SHA-256 (.*) differs from the backup" "$T/out"'
+up_reset; FAKE_ENV=(TMPDIR="$T/tmp" FAKE_COPY_FAIL=in); run "$V" upgrade --source "$T/relsrc/agora"
+check_true 'copying the release in fails: the real error is shown, not only "failed"' '[ "$RC" = 1 ] && grep -q "No space left on device" "$T/out" && grep -q "copying .* into agora failed" "$T/out"'
+
+# room, on the Mac and in the VM
+up_reset; FAKE_ENV=(TMPDIR="$T/tmp" FAKE_FREE_KB=1000); run "$V" upgrade --source "$T/relsrc/agora"
+check_true 'no room on the Mac: refused before any backup' '[ "$RC" = 1 ] && grep -q "free, the upgrade needs about" "$T/out" && grep -q "Agora Backups" "$T/out" && ! grep -q -- "--backup-only" "$T/guest-upgrade-calls"'
+up_reset; FAKE_ENV=(TMPDIR="$T/tmp" FAKE_FREE_KB=1000); run "$V" upgrade --source "$T/relsrc/agora" --force
+check_true 'no room on the Mac, --force: goes on' '[ "$RC" = 0 ] && grep -q "force: starting although there is little room on this Mac" "$T/out"'
+up_reset; FAKE_ENV=(TMPDIR="$T/tmp" FAKE_SPACE_EXIT=1); run "$V" upgrade --source "$T/relsrc/agora"
+check_true 'no room in the VM: refused before any backup' '[ "$RC" = 1 ] && grep -q "not enough room in agora" "$T/out" && ! grep -q -- "--backup-only" "$T/guest-upgrade-calls"'
+
+# the user'"'"'s own choice: the backup stays in the VM
+up_reset; FAKE_ENV=(TMPDIR="$T/tmp"); run "$V" upgrade --source "$T/relsrc/agora" --backup-in-vm-only
+check_true '--backup-in-vm-only: no backup step, no copy, a warning, the VM script told' '[ "$RC" = 0 ] && ! grep -q -- "--backup-only" "$T/guest-upgrade-calls" && ! grep -q "^limactl copy agora:" "$CALLS" && grep -q "stays inside agora" "$T/out" && call_n 2 | grep -q -- "--backup-in-vm-only"'
+
+# retention on the Mac
+mkbk() { mkdir -p "$BK"; head -c 1024 /dev/zero > "$BK/$1"; }
+seed() { up_reset; for d in 01 02 03 04; do mkbk "agora-agora-before-9.0.0-202601${d}T000000Z.agorabk"; done; mkbk "agora-agora-20260101T000000Z.agorabk"; }
+seed; FAKE_ENV=(TMPDIR="$T/tmp"); run "$V" upgrade --source "$T/relsrc/agora"
+check 'retention on the Mac: keeps the newest 3 upgrade backups' 3 "$(ls "$BK" | grep -c -- '-before-')"
+check_true 'retention on the Mac: the oldest are gone, the newest stay, the backup command'"'"'s bundle stays' '[ ! -e "$BK/agora-agora-before-9.0.0-20260101T000000Z.agorabk" ] && [ ! -e "$BK/agora-agora-before-9.0.0-20260102T000000Z.agorabk" ] && [ -e "$BK/agora-agora-before-9.0.0-20260104T000000Z.agorabk" ] && [ -e "$BK/agora-agora-20260101T000000Z.agorabk" ]'
+check_true 'retention on the Mac: prints what it removed' '[ "$(grep -c "removed old upgrade backup" "$T/out")" = 2 ]'
+seed; FAKE_ENV=(TMPDIR="$T/tmp" FAKE_UPGRADE_EXIT=4); run "$V" upgrade --source "$T/relsrc/agora"
+check_true 'a failed upgrade deletes nothing on the Mac (the new copy is kept too)' '[ "$RC" = 1 ] && [ "$(ls "$BK" | grep -c -- "-before-")" = 5 ] && [ -e "$BK/agora-agora-20260101T000000Z.agorabk" ]'
+check_true 'a failed upgrade: names the backup on the Mac for the way back' 'grep -q "the backup is also on this Mac: $BK/$NEWBK" "$T/out"'
+seed; FAKE_ENV=(TMPDIR="$T/tmp"); run "$V" upgrade --source "$T/relsrc/agora" --keep-backups 0
+check 'keep-backups 0 on the Mac: keeps all' 5 "$(ls "$BK" | grep -c -- '-before-')"
+check 'keep-backups: remembered for the next upgrade' 1 "$(grep -c '^keep_backups=0$' "$T/home/.agora/macos/agora.conf")"
+check_true 'keep-backups: forwarded to the VM, which remembers it too' 'call_n 3 | grep -q -- "--keep-backups 0"'
+run "$V" upgrade --source "$T/relsrc/agora" --keep-backups many
+check 'keep-backups with a non-number: refused' 1 "$RC"
+
+# the backup command checks its copy the same way
+rm -rf "$BK"; FAKE_ENV=(FAKE_COPY_CORRUPT=sha); run "$V" backup
+check_true 'backup: a copy that differs from the original is refused and removed' '[ "$RC" = 1 ] && grep -q "SHA-256" "$T/out" && [ -z "$(ls "$BK" 2>/dev/null)" ]'
+FAKE_ENV=(); rm -rf "$BK"; run "$V" backup
+check_true 'backup: a matching copy is kept, readable by this user only' '[ "$RC" = 0 ] && grep -q "size and SHA-256 match" "$T/out" && only_me "$(ls "$BK"/*.agorabk | head -n 1)"'
+
+# a VM that does not start: doctor says what is still there and what is supported
+mkdir -p "$T/home/.lima/agora"; printf 'time="x" level=info msg="Waiting for port 22 to become available"\n' > "$T/home/.lima/agora/ha.stderr.log"
+head -c 2048 /dev/zero > "$T/home/.lima/agora/diffdisk"
+sed -i.bak 's/^agora .*/agora Stopped/' "$T/lima/instances"
+FAKE_ENV=(FAKE_BUSY_PORTS='8443 3000'); run "$V" doctor
+check_true 'doctor, VM not running: says Lima is waiting for port 22 and quotes the log' '[ "$RC" = 1 ] && grep -q "The VM agora is not answering" "$T/out" && grep -q "Waiting for port 22" "$T/out"'
+check_true 'doctor, VM not running: the disk file still holds the data, and what not to run' 'grep -q "diffdisk" "$T/out" && grep -q "still hold Agora" "$T/out" && grep -q "Do NOT run limactl delete" "$T/out"'
+check_true 'doctor, VM not running: lists the backups on the Mac with dates' 'grep -q "Backups on this Mac in $BK" "$T/out" && grep -q "agora-agora-.*agorabk" "$T/out"'
+check_true 'doctor, VM not running: the options Lima supports, and what is untested' 'grep -q "limactl stop --force agora" "$T/out" && grep -q "serial" "$T/out" && grep -q "Not tested" "$T/out"'
+rm -rf "$BK"; run "$V" doctor
+check_true 'doctor, VM not running, no backup on the Mac: says so' 'grep -q "none. An upgrade.s backup used to stay inside the VM only" "$T/out"'
+sed -i.bak 's/^agora .*/agora Running/' "$T/lima/instances"; rm -rf "$T/home/.lima"
+FAKE_ENV=()
 
 # ─── upgrade-latest.sh (published as upgrade-macos.sh): one file, no checkout ───
 UL="$T/alone/upgrade-macos.sh"; mkdir -p "$T/alone"; cp "$ROOT/install/macos/upgrade-latest.sh" "$UL"

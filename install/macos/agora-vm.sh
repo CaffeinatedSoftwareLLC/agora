@@ -10,7 +10,13 @@
 #   agora-vm.sh restore FILE [--yes]         a bundle from this Mac into the VM's install
 #   agora-vm.sh upgrade                      to the latest release: downloads it, checks its SHA-256,
 #                                            copies it in and runs its install/upgrade.sh inside
-#                                            (--ref TAG: that release; --source DIR: a checkout)
+#                                            (--ref TAG: that release; --source DIR: a checkout).
+#                                            First: checks the room, takes the backup, copies it to
+#                                            ~/Agora Backups and checks the copy; stops if any fails.
+#                                            Then keeps the newest 3 upgrade backups (--keep-backups N,
+#                                            0: all), cleans Docker (--no-prune: not), --force: go on
+#                                            despite little room, --backup-in-vm-only: the backup stays
+#                                            in the VM (lost with it)
 #   agora-vm.sh tailnet on|off|status        Tailscale access (docs/remote-access.md): runs the
 #                                            install's install/tailnet.sh inside ([--hostname NAME]
 #                                            [--install-tailscale] for on)
@@ -28,6 +34,8 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/../lib/common.sh"
 # shellcheck source=lib/macos.sh
 . "$HERE/lib/macos.sh"
+# shellcheck source=../lib/backups.sh
+. "$HERE/../lib/backups.sh"
 # Copies of a passphrase or bundle in the VM go however this ends
 FETCHED=''
 trap 'guest_cleanup; [ -z "$FETCHED" ] || rm -rf "$FETCHED"' EXIT
@@ -35,6 +43,7 @@ trap 'guest_cleanup; [ -z "$FETCHED" ] || rm -rf "$FETCHED"' EXIT
 CMD=${1:-}
 [ $# -eq 0 ] || shift
 VM=agora OUT='' FILE='' YES=0 REPORT=0 SRC='' PASS_FILE='' REF='' TS_ARGS=() NI=()
+KEEP='' FORCE=0 NO_PRUNE=0 VM_ONLY=0
 REST=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -47,12 +56,17 @@ while [ $# -gt 0 ]; do
         --hostname) TS_ARGS+=(--hostname "${2:?--hostname needs a name}"); shift ;;
         --install-tailscale) TS_ARGS+=("$1") ;;
         --non-interactive) NI=(--non-interactive) ;;
+        --keep-backups) KEEP=${2:?--keep-backups needs a number}; shift ;;
+        --force) FORCE=1 ;;
+        --no-prune) NO_PRUNE=1 ;;
+        --backup-in-vm-only) VM_ONLY=1 ;;
         --passphrase-file) PASS_FILE=${2:?--passphrase-file needs a file}; shift ;;
-        -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
         *) if [ "$CMD" = restore ] && [ -z "$FILE" ]; then FILE=$1; else REST+=("$1"); fi ;;
     esac
     shift
 done
+case "$KEEP" in ''|[0-9]|[0-9][0-9]) ;; *) die "--keep-backups needs a number (0 keeps every upgrade backup)" ;; esac
 printf '%s' "$VM" | grep -Eq "$VM_NAME_RE" || die "--vm must be lowercase letters, digits and dashes"
 [ -z "$PASS_FILE" ] || [ -r "$PASS_FILE" ] || die "can't read $PASS_FILE"
 
@@ -127,7 +141,11 @@ case "$CMD" in
         done
         a=$(state_get "$VM" api_port)
         if [ -n "$a" ] && curl -fsS -m 5 "http://127.0.0.1:$a/health" 2>/dev/null | grep -q '"ok"'; then say "  ok      http://127.0.0.1:$a/health"
-        else say "  FAILED  http://127.0.0.1:${a:-?}/health doesn't answer from the Mac"; fails=1; fi
+        else say "  FAILED  http://127.0.0.1:${a:-?}/health doesn't answer from the Mac"; fails=1; health_bad=1; fi
+        if [ "$s" != Running ] || [ "${health_bad:-0}" = 1 ]; then
+            # Only when something is already failing: Lima's log keeps its start-up lines for good
+            [ -z "$s" ] || vm_wont_start_report "$VM" "$HOME/Agora Backups"
+        fi
         [ "$s" = Running ] || exit 1
         say ''
         say "${BOLD}Inside $VM${RESET}"
@@ -148,9 +166,8 @@ case "$CMD" in
         set +e; vm_sh "$VM" bash "$d/install/backup.sh" --dir "$d" --out "$d/backups/$name" ${GPASS[@]+"${GPASS[@]}"}; c=$?; set -e
         guest_cleanup
         [ "$c" = 0 ] || die "install/backup.sh failed in $VM (exit $c)"
-        (umask 077; vm_copy_out "$VM" "$d/backups/$name" "$OUT") || die "the backup is in $VM:$d/backups/$name, but copying it to $OUT failed"
-        chmod 600 "$OUT"
-        ok "$OUT (also in $VM:$d/backups/). Without its passphrase it can't be restored."
+        fetch_bundle_verified "$VM" "$d/backups/$name" "$OUT" || die "the backup is in $VM:$d/backups/$name, but copying it to $OUT failed or doesn't match the original"
+        ok "$OUT (size and SHA-256 match the copy in $VM:$d/backups/). Without its passphrase it can't be restored."
         ;;
     restore)
         need_vm
@@ -179,12 +196,67 @@ case "$CMD" in
         SRC=$(cd "$SRC" && pwd)
         [ -f "$SRC/install/upgrade.sh" ] || die "$SRC is not an Agora release"
         info "copying $(agora_version "$SRC") into $VM"
-        gs=$(copy_source_in "$VM" "$SRC") || die "copying $SRC into $VM failed"
+        gs=$(copy_source_in "$VM" "$SRC") || die "copying $SRC into $VM failed (limactl's message is above)"
         guest_tmp_add "$VM" "$gs"
         g=$(guest_tmp); guest_tmp_add "$VM" "$g"; pass_args "$g"
-        set +e; vm_sh "$VM" bash "$gs/install/upgrade.sh" --dir "$d" ${GPASS[@]+"${GPASS[@]}"} ${NI[@]+"${NI[@]}"} ${REST[@]+"${REST[@]}"}; c=$?; set -e
+        inst=$(vm_sh "$VM" sh -c 'sed -n "s/^AGORA_INSTANCE=//p" "$1/.env.prod" | tail -n 1' _ "$d" | tr -d '\r' || true); inst=${inst:-agora}
+        keep=${KEEP:-$(state_get "$VM" keep_backups)}; keep=${keep:-$DEFAULT_KEEP_BACKUPS}
+        UPX=(); [ "$FORCE" = 0 ] || UPX+=(--force)
+        [ "$NO_PRUNE" = 0 ] || UPX+=(--no-prune)
+        [ -z "$KEEP" ] || UPX+=(--keep-backups "$KEEP")
+
+        # 1. Room, in the VM and on this Mac, before anything is stopped or copied
+        step mac.space "Checking there is room for the upgrade"
+        set +e; sp=$(vm_sh "$VM" bash "$gs/install/upgrade.sh" --dir "$d" --check-space ${GPASS[@]+"${GPASS[@]}"} ${NI[@]+"${NI[@]}"} $([ "$FORCE" = 0 ] || echo --force) ${REST[@]+"${REST[@]}"}); c=$?; set -e
+        printf '%s\n' "$sp" | sed '/^AGORA_BACKUP_EST_KB=/d'
+        [ "$c" = 0 ] || die "not enough room in $VM for the upgrade; nothing was changed (the lines above say where). --force goes on anyway"
+        est=$(printf '%s\n' "$sp" | sed -n 's/^AGORA_BACKUP_EST_KB=//p' | tail -n 1); est=${est:-0}
+        bdir="$HOME/Agora Backups"
+        if [ "$VM_ONLY" = 0 ]; then
+            SPACE_NEEDS=''
+            space_need "$bdir" "$est" 'the copy of the backup on this Mac'
+            space_need "$HOME/.lima/$VM" "$((est + UPGRADE_BUILD_GB * 1048576))" "the VM's disk file, which only grows (the backup and the new images)"
+            if ! space_check "  Free some room on this Mac and run it again: remove old backups in $bdir, or other big files. The VM's disk file never shrinks by itself, so the room has to be on the Mac. To go ahead anyway: --force."; then
+                if [ "$FORCE" = 1 ]; then warn "--force: starting although there is little room on this Mac"
+                else die "not enough room on this Mac for the upgrade; nothing was changed"; fi
+            fi
+        fi
+        ok "enough room (the backup is expected to be about $(kb_text "$est"))"
+
+        # 2. The backup, copied out of the VM and checked, before the upgrade changes anything
+        UPB=()
+        if [ "$VM_ONLY" = 0 ]; then
+            step mac.backup "Backing up first, then copying the backup to this Mac"
+            res="$g/backup-result"
+            set +e; vm_sh "$VM" bash "$gs/install/upgrade.sh" --dir "$d" --backup-only --backup-result-file "$res" ${GPASS[@]+"${GPASS[@]}"} ${NI[@]+"${NI[@]}"} ${REST[@]+"${REST[@]}"} ${UPX[@]+"${UPX[@]}"}; c=$?; set -e
+            if [ "$c" != 0 ]; then guest_cleanup; die "the backup failed in $VM (exit $c); nothing was changed"; fi
+            gb=$(vm_sh "$VM" sed -n 's/^bundle=//p' "$res" | tr -d '\r' | tail -n 1 || true)
+            [ -n "$gb" ] || { guest_cleanup; die "the backup step didn't say where the bundle is; nothing was changed"; }
+            mkdir -p "$bdir"; chmod 700 "$bdir"
+            OUT="$bdir/$(basename "$gb")"
+            if ! fetch_bundle_verified "$VM" "$gb" "$OUT"; then
+                guest_cleanup
+                die "the backup was taken, but it could not be copied to $OUT, or the copy doesn't match, so the upgrade was stopped before it changed anything. The backup is still in $VM at $gb. Nothing was changed; make room or fix the problem above and run the upgrade again. (--backup-in-vm-only goes on with the backup only inside the VM.)"
+            fi
+            ok "backup on this Mac: $OUT (size and SHA-256 match the original in $VM)"
+            UPB=(--use-backup "$gb")
+        else
+            warn "--backup-in-vm-only: this upgrade's backup stays inside $VM. If the VM stops working it is lost with it."
+            UPB=(--backup-in-vm-only)
+        fi
+
+        # 3. The upgrade itself
+        set +e; vm_sh "$VM" bash "$gs/install/upgrade.sh" --dir "$d" ${GPASS[@]+"${GPASS[@]}"} ${NI[@]+"${NI[@]}"} ${REST[@]+"${REST[@]}"} ${UPB[@]+"${UPB[@]}"} ${UPX[@]+"${UPX[@]}"}; c=$?; set -e
         guest_cleanup
-        [ "$c" = 0 ] || die "install/upgrade.sh failed in $VM (exit $c). To go back: bash $0 shell bash install/upgrade.sh --rollback"
+        [ "$c" = 0 ] || die "install/upgrade.sh failed in $VM (exit $c). Nothing was deleted. To go back: bash $0 shell bash install/upgrade.sh --rollback${OUT:+ (the backup is also on this Mac: $OUT)}"
+        # 4. Only now: old upgrade backups on this Mac beyond the newest N (never one made with the backup command)
+        [ -z "$KEEP" ] || state_set "$VM" keep_backups "$KEEP"
+        if [ "$keep" != 0 ] && [ -d "$bdir" ]; then
+            PRUNED_BYTES=0
+            prune_upgrade_backups "$bdir" "$inst" "$keep" "${OUT:-}"
+            [ "${PRUNED_BYTES:-0}" = 0 ] || say "  freed $(awk -v b="$PRUNED_BYTES" 'BEGIN { printf "%.1f GB", b / 1073741824 }') of old upgrade backups in $bdir (keeping the newest $keep; --keep-backups N changes it, 0 keeps all)"
+        fi
+        if [ -n "${OUT:-}" ]; then say "  This upgrade's backup is on this Mac: $OUT"; fi
         # From the Mac's side: Lima's forward to the API (the checks above ran inside the VM)
         a=$(state_get "$VM" api_port)
         if [ -n "$a" ]; then
@@ -239,6 +311,6 @@ case "$CMD" in
             *) die "keepalive agent, daemon or off" ;;
         esac
         ;;
-    ''|-h|--help) sed -n '2,23p' "$0"; [ -n "$CMD" ] ;;
+    ''|-h|--help) sed -n '2,29p' "$0"; [ -n "$CMD" ] ;;
     *) die "unknown command $CMD (status, shell, doctor, backup, restore, upgrade, tailnet, stop, start, keepalive)" ;;
 esac

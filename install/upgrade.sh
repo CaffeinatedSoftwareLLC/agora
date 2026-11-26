@@ -22,6 +22,21 @@
 # --rollback moves the new release out the same way, puts the previous one back, sets the
 # sandbox network back to what that release declares and restores the backup taken before the
 # upgrade.
+#
+# Where the backup goes (docs/installing.md, "Backups"): a backup inside the VM or WSL distro the
+# install runs in is lost with it, so it is also copied out, checked, before anything changes:
+#   --copy-backup-to DIR   copy the bundle to DIR and check its size and SHA-256; stop if that fails.
+#                          In WSL, with no option, the Windows user's "Agora Backups" folder
+#   --backup-dir DIR       write the backup to DIR (another disk) instead of <install>/backups
+#   --backup-in-vm-only    accept a backup that stays where the install is (WSL; the Mac wrapper)
+#   --backup-only          take the backup (and copy it) and stop; --backup-result-file F gets its path
+#   --use-backup FILE      continue with a backup already taken and copied out, take none
+#   --keep-backups N       keep the newest N upgrade backups per location (default 3; 0: keep all;
+#                          remembered as AGORA_KEEP_BACKUPS in .env.prod). The backup command's
+#                          bundles are never removed; nothing is removed when the upgrade fails
+#   --force                start although the free-space check says there is too little room
+#   --no-prune             keep Docker's build cache and old box images after the upgrade
+#   --check-space          only run the free-space check
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -35,9 +50,13 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/lib/sandbox-net.sh"
 # shellcheck source=lib/tailnet.sh
 . "$HERE/lib/tailnet.sh"
+# shellcheck source=lib/backups.sh
+. "$HERE/lib/backups.sh"
 
 SELF=$(cd "$HERE/.." && pwd)
 DIR='' SOURCE='' REF='' PASS_ARG='' ROLLBACK=0 NO_BACKUP=0
+BACKUP_DIR='' COPY_TO='' KEEP='' FORCE=0 NO_PRUNE=0 BACKUP_ONLY=0 USE_BACKUP='' RESULT_FILE='' CHECK_SPACE=0 VM_ONLY=0
+FWD=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --dir) DIR=$2; shift ;;
@@ -47,11 +66,24 @@ while [ $# -gt 0 ]; do
         --rollback) ROLLBACK=1 ;;
         --no-backup) NO_BACKUP=1 ;;
         --non-interactive) NON_INTERACTIVE=1 ;;
-        -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+        --backup-dir) BACKUP_DIR=${2:?--backup-dir needs a folder}; FWD+=("$1" "$2"); shift ;;
+        --copy-backup-to) COPY_TO=${2:?--copy-backup-to needs a folder}; FWD+=("$1" "$2"); shift ;;
+        --keep-backups) KEEP=${2:?--keep-backups needs a number}; FWD+=("$1" "$2"); shift ;;
+        --force) FORCE=1; FWD+=("$1") ;;
+        --no-prune) NO_PRUNE=1; FWD+=("$1") ;;
+        --backup-in-vm-only) VM_ONLY=1; FWD+=("$1") ;;
+        --backup-only) BACKUP_ONLY=1 ;;
+        --use-backup) USE_BACKUP=${2:?--use-backup needs a bundle}; shift ;;
+        --backup-result-file) RESULT_FILE=${2:?--backup-result-file needs a file}; shift ;;
+        --check-space) CHECK_SPACE=1 ;;
+        -h|--help) sed -n '2,41p' "$0"; exit 0 ;;
         *) echo "upgrade.sh: unknown option $1" >&2; exit 2 ;;
     esac
     shift
 done
+case "$KEEP" in ''|[0-9]|[0-9][0-9]) ;; *) echo "upgrade.sh: --keep-backups needs a number (0 keeps every backup)" >&2; exit 2 ;; esac
+[ -z "$BACKUP_DIR" ] || case "$BACKUP_DIR" in /*) ;; *) echo "upgrade.sh: --backup-dir needs an absolute path" >&2; exit 2 ;; esac
+[ -z "$USE_BACKUP" ] || [ -f "$USE_BACKUP" ] || { echo "upgrade.sh: --use-backup: $USE_BACKUP isn't a file" >&2; exit 2; }
 DIR=$(cd "${DIR:-$SELF}" && pwd)
 ENV="$DIR/$ENV_FILE_NAME"
 [ -f "$ENV" ] || die "no $ENV_FILE_NAME in $DIR"
@@ -72,7 +104,7 @@ if [ "$ROLLBACK" = 0 ] && [ -z "$SOURCE" ] && { [ -n "$REF" ] || [ "$SELF" = "$D
     ok "Agora $(agora_version "$FETCHED"), checked against its SHA-256"
     nb_args=(); [ "$NO_BACKUP" = 0 ] || nb_args=(--no-backup)
     rc=0
-    bash "$FETCHED/install/upgrade.sh" --dir "$DIR" --source "$FETCHED" "${pass_args[@]}" "${ni_args[@]}" "${nb_args[@]}" || rc=$?
+    bash "$FETCHED/install/upgrade.sh" --dir "$DIR" --source "$FETCHED" "${pass_args[@]}" "${ni_args[@]}" "${nb_args[@]}" "${FWD[@]}" || rc=$?
     exit "$rc"
 fi
 
@@ -138,6 +170,46 @@ if [ "$ROLLBACK" = 1 ]; then
 fi
 
 AGORA_VERSION=$OLD_VERSION
+BK_DIR=${BACKUP_DIR:-$DIR/backups}
+WSL_UNRESOLVED=0 COPIED=''
+# In WSL the install and its backup die together with the distro: the Windows side gets a copy
+if [ "$NO_BACKUP" = 0 ] && [ -z "$COPY_TO" ] && [ "$VM_ONLY" = 0 ] && [ -z "$USE_BACKUP" ] && is_wsl; then
+    if COPY_TO=$(windows_backup_dir); then info "WSL: the backup is also copied to $COPY_TO (on Windows)"
+    else COPY_TO=''; WSL_UNRESOLVED=1; fi
+fi
+# In the Mac's Lima VM only the Mac can take the backup out: agora-vm.sh upgrade does that and passes
+# --use-backup. Started any other way (an older agora-vm.sh, a shell in the VM) it would keep the
+# backup only inside the VM, which is what lost an install's data once.
+if is_lima && [ "$NO_BACKUP" = 0 ] && [ -z "$USE_BACKUP" ] && [ -z "$COPY_TO" ] && [ "$VM_ONLY" = 0 ] && [ "$CHECK_SPACE" = 0 ] && [ "$BACKUP_ONLY" = 0 ]; then
+    die "this is the Lima VM on a Mac, and a backup taken here stays inside the VM: it is lost if the VM won't start. Nothing was changed. Upgrade from the Mac instead: bash install/macos/agora-vm.sh upgrade (or upgrade-macos.sh from the release page), which copies the backup to ~/Agora Backups first. To keep the backup in the VM anyway: --backup-in-vm-only"
+fi
+KEEP_GIVEN=$KEEP
+[ -n "$KEEP" ] || KEEP=$(env_get "$ENV" AGORA_KEEP_BACKUPS)
+KEEP=${KEEP:-$DEFAULT_KEEP_BACKUPS}
+case "$KEEP" in ''|*[!0-9]*) KEEP=$DEFAULT_KEEP_BACKUPS ;; esac
+
+# Room for the upgrade, before anything changes: the backup, its copy, the new images and their build
+BACKUP_EST_KB=$(expected_backup_kb "$BK_DIR" "$DIR/backups")
+BUILD_KB=$((UPGRADE_BUILD_GB * 1048576))
+DOCKER_ROOT=$(dk info --format '{{.DockerRootDir}}' 2>/dev/null || true)
+[ -d "$DOCKER_ROOT" ] || DOCKER_ROOT=$DIR
+SPACE_NEEDS=''
+if [ "$NO_BACKUP" = 0 ] && [ -z "$USE_BACKUP" ]; then
+    space_need "$BK_DIR" "$BACKUP_EST_KB" 'the backup'
+    [ -z "$COPY_TO" ] || space_need "$COPY_TO" "$BACKUP_EST_KB" 'the copy of the backup outside'
+fi
+space_need "$DOCKER_ROOT" "$BUILD_KB" 'the new images and their build'
+space_need "$DIR" 512000 "the new release's files"
+if ! space_check "  Free some room and run the upgrade again: delete old backups in $DIR/backups, run 'docker builder prune', remove old box images ('docker image ls agora/box', then 'docker image rm <tag>'). To go ahead anyway: --force."; then
+    if [ "$FORCE" = 1 ]; then warn "--force: starting although there is little room"
+    else die "not enough free space for the upgrade; nothing was changed"; fi
+fi
+if [ "$CHECK_SPACE" = 1 ]; then
+    say "AGORA_BACKUP_EST_KB=$BACKUP_EST_KB"
+    ok "enough room for the upgrade (the backup is expected to be about $(kb_text "$BACKUP_EST_KB"))"
+    FINISHED=1
+    exit 0
+fi
 # Before anything changes: an install from before #209 gets its Compose project name written
 # down as COMPOSE_PROJECT_NAME and AGORA_INSTANCE, so the new release keeps the same containers,
 # volumes and networks and boxd finds the edge under that name
@@ -173,11 +245,30 @@ if [ "$NO_BACKUP" = 1 ]; then
     warn "--no-backup: there is nothing to roll back to"
     bundle=''
 else
-    step upgrade.backup 'Backing up the running install first (the new release'"'"'s backup, the old stack)'
-    mkdir -p "$DIR/backups"
-    chmod 700 "$DIR/backups"
-    bundle="$DIR/backups/agora-$(env_get "$ENV" AGORA_INSTANCE)-before-$(tag_version "$NEW_VERSION")-$STAMP.agorabk"
-    bash "$STAGE/install/backup.sh" --dir "$DIR" --out "$bundle" --crypt-image "$MAINT" "${pass_args[@]}" "${ni_args[@]}"
+    if [ -n "$USE_BACKUP" ]; then
+        step upgrade.backup 'Using the backup taken (and copied out) before'
+        bundle=$USE_BACKUP
+        ok "$bundle"
+    else
+        step upgrade.backup 'Backing up the running install first (the new release'"'"'s backup, the old stack)'
+        mkdir -p "$BK_DIR"
+        chmod 700 "$BK_DIR"
+        bundle="$BK_DIR/agora-$(env_get "$ENV" AGORA_INSTANCE)-before-$(tag_version "$NEW_VERSION")-$STAMP.agorabk"
+        bash "$STAGE/install/backup.sh" --dir "$DIR" --out "$bundle" --crypt-image "$MAINT" "${pass_args[@]}" "${ni_args[@]}"
+        if [ -n "$COPY_TO" ]; then
+            step upgrade.backup-copy "Copying the backup out to $COPY_TO and checking the copy"
+            if COPIED=$(copy_bundle_verified "$bundle" "$COPY_TO"); then ok "$COPIED (size and SHA-256 match)"
+            else die "the backup could not be copied to $COPY_TO, so nothing was changed. The backup itself is $bundle. Fix the folder (space, permissions) and run the upgrade again, or pass --backup-in-vm-only to go on with the backup staying where Agora is"; fi
+        fi
+    fi
+fi
+if [ "$BACKUP_ONLY" = 1 ]; then
+    [ -z "$RESULT_FILE" ] || printf 'bundle=%s\n' "$bundle" > "$RESULT_FILE"
+    rm -rf "$STAGE"
+    FINISHED=1
+    say ''
+    say "  Backup taken: $bundle. Nothing else was changed."
+    exit 0
 fi
 
 step upgrade.replace 'Moving the old release aside and putting the new one in place'
@@ -227,4 +318,35 @@ send_install_report ok null
 say ''
 say "  Upgraded to $NEW_VERSION. boxd rebuilds boxes on an older image one at a time; each posts a notice in its home channel."
 say "  To go back: bash $DIR/install/upgrade.sh --rollback --dir $DIR"
+
+# Only now, with the new release running: say where the backup is, remove what is no longer needed
+if [ -n "$bundle" ]; then
+    say ''
+    say "${BOLD}Backup${RESET}"
+    if [ -n "$COPIED" ]; then
+        say "  A copy outside where Agora runs is in $COPIED"
+    elif [ "$WSL_UNRESOLVED" = 1 ]; then
+        warn "THIS UPGRADE'S BACKUP IS ONLY INSIDE THE WSL DISTRO ($bundle). If the distro is lost or will not start, the backup is lost with it. Windows' folder could not be found from here. Copy it out now, for example: cp $bundle /mnt/c/Users/<you>/ (install/windows/install.ps1 -Existing upgrade copies it to %USERPROFILE%\\Agora Backups itself)."
+    elif [ "$VM_ONLY" = 1 ]; then
+        warn "the backup stays where Agora runs ($bundle), as --backup-in-vm-only asked: if this VM, distro or disk is lost, so is the backup."
+    elif [ -n "$USE_BACKUP" ]; then
+        say "  Taken and copied out before this step; the copy inside is $bundle"
+    elif [ -n "$BACKUP_DIR" ]; then
+        say "  $bundle, in the folder --backup-dir named. It is safe from a lost install folder only if that folder is on another disk."
+    else
+        say "  $bundle is on the same disk as Agora: if that disk fails, both are lost."
+        say "  For a backup on another disk: --backup-dir <folder on that disk>, or copy the file there."
+    fi
+fi
+if [ "$KEEP" != 0 ]; then
+    PRUNED_BYTES=0
+    prune_upgrade_backups "$BK_DIR" "$INST" "$KEEP" "$bundle"
+    [ -z "$COPY_TO" ] || prune_upgrade_backups "$COPY_TO" "$INST" "$KEEP" "$COPIED"
+    [ "${PRUNED_BYTES:-0}" = 0 ] || say "  freed $(awk -v b="$PRUNED_BYTES" 'BEGIN { printf "%.1f GB", b / 1073741824 }') of old upgrade backups (keeping the newest $KEEP; --keep-backups N changes it, 0 keeps all)"
+fi
+[ -z "$KEEP_GIVEN" ] || env_set "$ENV" AGORA_KEEP_BACKUPS "$KEEP"
+if [ "$NO_PRUNE" = 0 ]; then
+    say "${BOLD}Cleaning up Docker${RESET}"
+    prune_docker_after_upgrade "$DIR" "$ENV" "$MAINT"
+fi
 post_start_checks "$DIR" || true
